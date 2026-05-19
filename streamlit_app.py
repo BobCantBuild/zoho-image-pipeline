@@ -1,13 +1,15 @@
 """
 Entry point for Streamlit Cloud deployment.
 Streamlit Cloud recognizes this filename automatically.
+Runs the dashboard application.
 """
+
+import runpy
 import sys
 from pathlib import Path
 
-# Import and run the dashboard
-from dashboard import *  # noqa: F401, F403
+# Get the directory of this file
+app_dir = Path(__file__).parent
 
-# This ensures the app runs when deployed to Streamlit Cloud
-if __name__ == "__main__":
-    pass  # Dashboard runs via imports above
+# Run dashboard.py in current namespace
+runpy.run_path(str(app_dir / "dashboard.py"), run_name="__main__")
