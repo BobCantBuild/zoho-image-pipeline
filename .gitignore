@@ -4,3 +4,4 @@
 *.log
 exports/
 .env
+.streamlit/secrets.toml

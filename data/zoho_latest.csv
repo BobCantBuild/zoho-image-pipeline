@@ -1,0 +1,3 @@
+sno,ticket_id,Zoho_order_ID,file_order_id,file_star,file_name,pipeline_flag,remarks_file_order_id,remarks_file_star
+1,TKT001,ORD001,ORD001,5.0,sample_file_1.pdf,OK,,
+2,TKT002,ORD002,,0.0,sample_file_2.pdf,PENDING,File order ID missing,File star missing

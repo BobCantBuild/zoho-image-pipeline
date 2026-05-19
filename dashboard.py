@@ -25,7 +25,8 @@ st.set_page_config(
 )
 
 # ── Paths ─────────────────────────────────────────────────────
-DB_PATH  = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
+# Check if on cloud (file doesn't exist), use CSV
+DB_PATH  = Path(r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db") if os.name == 'nt' else Path("zoho_pipeline.db")
 CSV_PATH = Path(__file__).parent / "data" / "zoho_latest.csv"
 
 # =============================================================
