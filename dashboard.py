@@ -371,8 +371,7 @@ with pc2:
 #  FILTERS
 # =============================================================
 
-st.markdown('<div class="sec-head">Filter &amp; Search Records</div>',
-            unsafe_allow_html=True)
+st.markdown('<div class="sec-head">Records</div>', unsafe_allow_html=True)
 
 st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file order ID or ticket ID…",
               label_visibility="collapsed", key="search_box")
@@ -414,33 +413,9 @@ with fc4:
 with fc5:
     st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
     if st.button("✕  Clear All Filters", use_container_width=True):
-        for k in ["search_box","ff1","ff2","ff3","ff4","branch_filter","date_range"]:
+        for k in ["search_box","ff1","ff2","ff3","ff4","branch_filter","date_range","page"]:
             if k in st.session_state: del st.session_state[k]
         st.cache_data.clear(); st.rerun()
-
-bc1, bc2 = st.columns([1, 2])
-
-with bc1:
-    st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
-    if "branch" in df.columns:
-        branches = sorted({(b or "").strip() for b in df["branch"].fillna("").tolist()} - {""})
-    else:
-        branches = []
-    branch_filter = st.selectbox("", ["All", *branches], label_visibility="collapsed", key="branch_filter")
-
-with bc2:
-    st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
-    if "date_of_posting" in df.columns:
-        dates = pd.to_datetime(df["date_of_posting"], errors="coerce").dropna()
-    else:
-        dates = pd.Series([], dtype="datetime64[ns]")
-
-    if len(dates) > 0:
-        min_d = dates.min().date()
-        max_d = dates.max().date()
-        date_range = st.date_input("", value=(min_d, max_d), label_visibility="collapsed", key="date_range")
-    else:
-        date_range = st.date_input("", value=None, label_visibility="collapsed", key="date_range")
 
 
 # =============================================================
@@ -451,6 +426,61 @@ if df.empty:
     st.warning("⚠️  No data available. Run `pipeline.py` to process records.")
     st.stop()
 
+
+# =============================================================
+#  PAGINATION + EXPORT
+# =============================================================
+
+PAGE_SIZE = 50
+
+# ---- Branch + Date filters (with clear X) ----
+if "branch" in df.columns:
+    branches = sorted({(b or "").strip() for b in df["branch"].fillna("").tolist()} - {""})
+else:
+    branches = []
+
+dates = pd.to_datetime(df.get("date_of_posting", pd.Series([], dtype="datetime64[ns]")), errors="coerce").dropna()
+default_date_range = None
+if len(dates) > 0:
+    default_date_range = (dates.min().date(), dates.max().date())
+
+count_col, branch_col, date_col, prev_col, next_col, export_col = st.columns([2.2, 1.6, 2.6, 1, 1, 2])
+
+with branch_col:
+    st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
+    b1, b2 = st.columns([6, 1])
+    with b1:
+        branch_filter = st.selectbox(
+            "",
+            ["All", *branches],
+            label_visibility="collapsed",
+            key="branch_filter",
+        )
+    with b2:
+        if st.button("✕", key="branch_clear", use_container_width=True):
+            if "branch_filter" in st.session_state:
+                del st.session_state["branch_filter"]
+            st.cache_data.clear()
+            st.rerun()
+
+with date_col:
+    st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
+    d1, d2 = st.columns([10, 1])
+    with d1:
+        date_range = st.date_input(
+            "",
+            value=st.session_state.get("date_range", default_date_range),
+            label_visibility="collapsed",
+            key="date_range",
+        )
+    with d2:
+        if st.button("✕", key="date_clear", use_container_width=True):
+            if "date_range" in st.session_state:
+                del st.session_state["date_range"]
+            st.cache_data.clear()
+            st.rerun()
+
+# ---- APPLY FILTERS ----
 filt = df.copy()
 if flag_filter  != "All": filt = filt[filt["Flag"]           == flag_filter]
 if order_filter != "All": filt = filt[filt["Order_ID_Flag"]  == order_filter]
@@ -476,30 +506,18 @@ if search:
     ]
 
 filt = filt.reset_index(drop=True)
-
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-st.markdown('<div class="sec-head">Records</div>', unsafe_allow_html=True)
-
-
-# =============================================================
-#  PAGINATION + EXPORT
-# =============================================================
-
-PAGE_SIZE   = 50
 total_pages = max(1, (len(filt) - 1) // PAGE_SIZE + 1)
 
-pa, pb, pc3, pd3, pe = st.columns([3, 1, 1, 1, 2])
-with pa:
-    st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>',
-                unsafe_allow_html=True)
-with pb:
+with count_col:
+    st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>', unsafe_allow_html=True)
+
+with prev_col:
     prev_btn = st.button("‹ Prev", use_container_width=True)
-with pc3:
-    page = st.number_input("", min_value=1, max_value=total_pages,
-                           value=1, label_visibility="collapsed")
-with pd3:
+
+with next_col:
     next_btn = st.button("Next ›", use_container_width=True)
-with pe:
+
+with export_col:
     exp_cols = [
         "sno",
         "date_of_posting_str",
@@ -532,9 +550,14 @@ with pe:
                        file_name="zoho_export.csv", mime="text/csv",
                        use_container_width=True)
 
-if prev_btn and page > 1:           page = int(page) - 1
-if next_btn and page < total_pages: page = int(page) + 1
-page = int(page)
+# Page state (kept in session_state, so Prev/Next works without a number input)
+page = int(st.session_state.get("page", 1))
+if prev_btn and page > 1:
+    page -= 1
+if next_btn and page < total_pages:
+    page += 1
+page = max(1, min(total_pages, int(page)))
+st.session_state["page"] = page
 
 
 # =============================================================
