@@ -108,19 +108,19 @@ def preprocess_for_stars(image_path: str) -> tuple:
     hsv    = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     
     # ── IMPROVED COLOR RANGES ────────────────────────────────
-    # Yellow stars: tighter hue range, higher saturation/value
-    # Avoids picking up oranges, skin tones, or faded colors
-    mask_y = cv2.inRange(hsv, np.array([20,  100, 100]),  np.array([30,  255, 255]))  # bright yellow
+    # Yellow/gold stars (common in Amazon/Flipkart).
+    # Phone photos often reduce saturation/value; keep bounds permissive and let shape
+    # validation in `ocr_engine.py` reject non-star blobs.
+    mask_y = cv2.inRange(hsv, np.array([18,  60,  80]),  np.array([35,  255, 255]))  # yellow/gold
     
-    # Green stars: tighter range to avoid picking up leaf/plant areas
-    mask_g = cv2.inRange(hsv, np.array([50,  80,  100]),  np.array([80,  255, 255]))  # bright green
+    # Green stars (some UIs use green filled stars)
+    mask_g = cv2.inRange(hsv, np.array([40,  50,  70]),  np.array([90,  255, 255]))  # green/teal
     
-    # Dim yellow (dark mode): stricter saturation/value to avoid picking
-    # up faded text or background patterns
-    mask_d = cv2.inRange(hsv, np.array([18,  40,  50]),  np.array([35,  150, 150]))  # dim yellow
+    # Dim yellow (dark mode / low exposure)
+    mask_d = cv2.inRange(hsv, np.array([15,  25,  40]),  np.array([40,  180, 180]))  # dim yellow
     
-    # Orange/red stars (some rating systems use these)
-    mask_o = cv2.inRange(hsv, np.array([5,  100,  100]),  np.array([17,  255, 255]))  # orange/red
+    # Orange stars (warm/gold shading or camera WB shift)
+    mask_o = cv2.inRange(hsv, np.array([0,  60,  70]),  np.array([18,  255, 255]))  # orange
     
     mask   = cv2.bitwise_or(mask_y, cv2.bitwise_or(mask_g, cv2.bitwise_or(mask_d, mask_o)))
     

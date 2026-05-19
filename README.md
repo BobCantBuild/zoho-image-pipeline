@@ -5,6 +5,13 @@ End-to-end pipeline to:
 2) Merge Zoho CSV metadata (Added Time, Branch, Ticket ID, Zoho Order ID)
 3) Publish a Streamlit dashboard (local + Streamlit Cloud) that always shows the same data
 
+## Scan any folder for star ratings
+
+Use this when you have a plain folder of screenshots/images and you only want star ratings:
+
+- `python star_scan.py --path "C:\\path\\to\\images" --recursive --out "data\\star_scan.csv"`
+- Optional debug output (mask + overlay PNGs): `python star_scan.py --path "C:\\path\\to\\images" --debug-dir "data\\star_debug"`
+
 ## Repo layout
 
 - `pipeline.py` — scans folders, runs OCR, writes SQLite (`zoho_pipeline.db`)

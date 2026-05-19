@@ -5,3 +5,10 @@
 exports/
 .env
 .streamlit/secrets.toml
+data/_tmp_tests/
+data/_tmp_star_scan.csv
+data/_cv2_test.png
+data/star_debug/
+data/_debug_one.csv
+data/_debug_two.csv
+data/_debug_three.csv
