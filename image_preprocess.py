@@ -94,6 +94,9 @@ def preprocess_for_stars(image_path: str) -> tuple:
     Preprocessing for star detection.
     Uses colour (no binarise) so HSV masks work correctly.
     Returns (colour_bgr, meta_with_star_mask).
+    
+    IMPROVED: More restrictive HSV ranges to avoid false positives
+    on path stars or artifacts.
     """
     img  = load(image_path)
     dark = is_dark_mode(img)
@@ -103,9 +106,30 @@ def preprocess_for_stars(image_path: str) -> tuple:
     # Do NOT binarise — we need colour for HSV star masks
 
     hsv    = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask_y = cv2.inRange(hsv, np.array([18,  80,  80]),  np.array([35,  255, 255]))  # yellow
-    mask_g = cv2.inRange(hsv, np.array([40,  60,  60]),  np.array([85,  255, 255]))  # green
-    mask_d = cv2.inRange(hsv, np.array([15,  25,  35]),  np.array([40,  180, 180]))  # dim yellow (dark mode)
-    mask   = cv2.bitwise_or(mask_y, cv2.bitwise_or(mask_g, mask_d))
+    
+    # ── IMPROVED COLOR RANGES ────────────────────────────────
+    # Yellow stars: tighter hue range, higher saturation/value
+    # Avoids picking up oranges, skin tones, or faded colors
+    mask_y = cv2.inRange(hsv, np.array([20,  100, 100]),  np.array([30,  255, 255]))  # bright yellow
+    
+    # Green stars: tighter range to avoid picking up leaf/plant areas
+    mask_g = cv2.inRange(hsv, np.array([50,  80,  100]),  np.array([80,  255, 255]))  # bright green
+    
+    # Dim yellow (dark mode): stricter saturation/value to avoid picking
+    # up faded text or background patterns
+    mask_d = cv2.inRange(hsv, np.array([18,  40,  50]),  np.array([35,  150, 150]))  # dim yellow
+    
+    # Orange/red stars (some rating systems use these)
+    mask_o = cv2.inRange(hsv, np.array([5,  100,  100]),  np.array([17,  255, 255]))  # orange/red
+    
+    mask   = cv2.bitwise_or(mask_y, cv2.bitwise_or(mask_g, cv2.bitwise_or(mask_d, mask_o)))
+    
+    # ── MORPHOLOGICAL CLEANUP ─────────────────────────────────
+    # Remove noise and fill small gaps in star shapes
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)  # remove tiny specks
+    
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)  # fill small holes
 
     return img, {"is_dark_mode": dark, "star_mask": mask}

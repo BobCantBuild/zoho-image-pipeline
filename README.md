@@ -85,4 +85,4 @@ python sync_to_github.py
 ```
 
 ## Notes
-- OCR engine is RapidOCR (no Tesseract installation required).
+- OCR engine is RapidOCR

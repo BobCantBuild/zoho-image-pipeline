@@ -239,17 +239,27 @@ def _build_star_rows(mask: np.ndarray) -> list:
     Scan the mask and return all candidate star rows as:
     [(top_y, blob_count, row_width, strip_mask), ...]
     sorted top-to-bottom (smallest top_y first).
+    
+    IMPROVED: 
+    - Stricter size validation
+    - Circularity check (reject elongated artifacts)
+    - Focus on top 60% of image (where ratings typically appear)
+    - Better blob uniformity detection
     """
     h, w      = mask.shape
+    
+    # Focus on upper portion of image (ratings appear near top, not in metadata)
+    max_scan_h = int(h * 0.60)
+    
     slice_h   = max(8, h // 14)   # each scan strip height
     step      = max(4, slice_h // 3)
     rows      = []
     seen_tops = set()
 
-    for top in range(0, h - slice_h, step):
+    for top in range(0, min(max_scan_h - slice_h, h - slice_h), step):
         strip = mask[top: top + slice_h, :]
         px    = cv2.countNonZero(strip)
-        if px < 15:
+        if px < 20:  # raised threshold
             continue
 
         # Find contours in this strip
@@ -259,16 +269,38 @@ def _build_star_rows(mask: np.ndarray) -> list:
                                     cv2.CHAIN_APPROX_SIMPLE)
 
         strip_area = slice_h * w
-        valid = [c for c in cnts
-                 if strip_area * 0.0005 < cv2.contourArea(c) < strip_area * 0.35]
+        
+        # IMPROVED: Stricter size constraints
+        # Star icons are typically 3-8% of strip area, not 0.05-35%
+        min_area = strip_area * 0.005   # 0.5% of strip
+        max_area = strip_area * 0.12    # 12% of strip
+        
+        valid = []
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if min_area < area < max_area:
+                # NEW: Circularity check - stars should be roughly circular
+                perimeter = cv2.arcLength(c, True)
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    # Ideal circle = 1.0, accept 0.5-1.0 (stars are slightly irregular)
+                    if 0.5 <= circularity <= 1.0:
+                        # NEW: Aspect ratio check - reject very elongated shapes
+                        x, y, w_box, h_box = cv2.boundingRect(c)
+                        aspect = max(w_box, h_box) / (min(w_box, h_box) + 1)
+                        if aspect < 2.0:  # reject if >2x elongated
+                            valid.append(c)
 
         if not (1 <= len(valid) <= 5):
             continue
 
         # Check size uniformity — star icons are same size
         areas  = [cv2.contourArea(c) for c in valid]
-        cv_val = (np.std(areas) / np.mean(areas)) if np.mean(areas) > 0 else 99
-        if cv_val > 0.6:   # too varied → not a star row
+        mean_area = np.mean(areas)
+        
+        # IMPROVED: Stricter uniformity check (CV < 0.4 instead of < 0.6)
+        cv_val = (np.std(areas) / mean_area) if mean_area > 0 else 99
+        if cv_val > 0.40:   # too varied → not a star row
             continue
 
         # Measure span width of blobs (leftmost to rightmost centroid)
@@ -280,6 +312,10 @@ def _build_star_rows(mask: np.ndarray) -> list:
         if not xs:
             continue
         row_width = max(xs) - min(xs) if len(xs) > 1 else int(np.sqrt(areas[0]))
+        
+        # NEW: Minimum row width to avoid single stray blobs
+        if row_width < int(w * 0.08):  # row should span at least 8% of width
+            continue
 
         # Avoid duplicates (same row detected in overlapping strips)
         bucket = top // slice_h
@@ -295,26 +331,55 @@ def _build_star_rows(mask: np.ndarray) -> list:
 
 
 def _count_filled_blobs(strip: np.ndarray) -> int:
-    """Count star blobs in a strip after morphological close."""
+    """
+    Count star blobs in a strip after morphological close.
+    
+    IMPROVED: Apply same strict filters as _build_star_rows:
+    - Size constraints (0.5-12% of strip area)
+    - Circularity validation
+    - Aspect ratio checking
+    """
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     closed = cv2.morphologyEx(strip, cv2.MORPH_CLOSE, kernel)
     cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
                                 cv2.CHAIN_APPROX_SIMPLE)
+    
     total = strip.shape[0] * strip.shape[1]
-    valid = [c for c in cnts
-             if total * 0.0005 < cv2.contourArea(c) < total * 0.40]
+    min_area = total * 0.005   # stricter: 0.5% of strip
+    max_area = total * 0.40    # keep max at 40%
+    
+    valid = []
+    for c in cnts:
+        area = cv2.contourArea(c)
+        if min_area < area < max_area:
+            # Circularity check
+            perimeter = cv2.arcLength(c, True)
+            if perimeter > 0:
+                circularity = 4 * np.pi * area / (perimeter ** 2)
+                if 0.5 <= circularity <= 1.0:
+                    # Aspect ratio check
+                    x, y, w_box, h_box = cv2.boundingRect(c)
+                    aspect = max(w_box, h_box) / (min(w_box, h_box) + 1)
+                    if aspect < 2.0:
+                        valid.append(c)
+    
     return len(valid)
 
 
 def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
     """
     Detect star rating using pure OpenCV colour analysis.
+    
+    IMPROVED:
+    - Stricter validation of detected shapes
+    - Better handling of single-star patterns
+    - Spatial constraints (must be in upper portion)
 
     Returns (star_count: float | None, method: str)
     method is one of: 'top_row', 'widest_row', 'single', 'none'
     """
     mask = meta.get("star_mask")
-    if mask is None or cv2.countNonZero(mask) < 15:
+    if mask is None or cv2.countNonZero(mask) < 20:
         return None, "none"
 
     rows = _build_star_rows(mask)
@@ -331,17 +396,28 @@ def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
         # the overall rating may be indicated by a single coloured star
         # (e.g. 4th star highlighted, rest unfilled/black)
         if n == 1 and len(rows) > 1:
-            # Look at total coloured pixel span to estimate position
-            # of the highlighted star among 5 positions
+            # Extract the single blob's position
             xs = []
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             closed = cv2.morphologyEx(strip, cv2.MORPH_CLOSE, kernel)
             cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Additional validation for single star blob
+            valid_single = []
             for c in cnts:
-                M = cv2.moments(c)
-                if M["m00"] > 0:
-                    xs.append(int(M["m10"] / M["m00"]))
+                area = cv2.contourArea(c)
+                perimeter = cv2.arcLength(c, True)
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    x, y, w_box, h_box = cv2.boundingRect(c)
+                    aspect = max(w_box, h_box) / (min(w_box, h_box) + 1)
+                    # Even stricter for single star
+                    if 0.6 <= circularity <= 1.0 and aspect < 1.8:
+                        M = cv2.moments(c)
+                        if M["m00"] > 0:
+                            xs.append(int(M["m10"] / M["m00"]))
+            
             if xs:
                 # Estimate star position from its x location within image width
                 h_img, w_img = mask.shape
