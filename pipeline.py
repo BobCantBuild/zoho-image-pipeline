@@ -281,6 +281,13 @@ if __name__ == "__main__":
 
     run(limit=a.limit, fresh=a.fresh, debug=a.debug)
 
+    # Merge Zoho CSV (Ticket ID + Order ID) into DB so dashboard/export has full fields
+    try:
+        from merge_csv import run as merge_csv_run
+        merge_csv_run()
+    except Exception as e:
+        print(f"  [merge_csv skipped]: {e}")
+
     if a.export:
         from export import export_to_excel
         p = export_to_excel()

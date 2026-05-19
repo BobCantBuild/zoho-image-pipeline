@@ -18,9 +18,12 @@ import csv
 import os
 from pathlib import Path
 
+from config import DB_PATH as CONFIG_DB_PATH
+from config import ZOHO_CSV_PATH as CONFIG_CSV_PATH
+
 # ── CONFIG — only edit these two lines if paths change ────────
-CSV_PATH = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\Final\15_05_2026\CustomerReviewSubmissionFormforSAs_Records_1.csv"
-DB_PATH  = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
+CSV_PATH = os.environ.get("ZOHOPIPE_ZOHO_CSV_PATH") or str(CONFIG_CSV_PATH)
+DB_PATH = os.environ.get("ZOHOPIPE_DB_PATH") or str(CONFIG_DB_PATH)
 # ──────────────────────────────────────────────────────────────
 
 
@@ -113,14 +116,17 @@ def find_columns(rows: list) -> tuple:
     return file_col, ticket_col, order_col
 
 
-def run():
+def run(csv_path: str | None = None, db_path: str | None = None):
     print()
     print("=" * 60)
     print("  CSV → SQLite Merge")
     print("=" * 60)
 
     # ── 1. Read CSV ────────────────────────────────────────────
-    rows = read_csv(CSV_PATH)
+    csv_path = csv_path or CSV_PATH
+    db_path = db_path or DB_PATH
+
+    rows = read_csv(csv_path)
     file_col, ticket_col, order_col = find_columns(rows)
 
     # Build lookup dict:  clean_filename → {ticket_id, csv_order_id}
@@ -140,13 +146,13 @@ def run():
         print(f"  [CSV] Rows skipped (empty file name): {skipped}")
 
     # ── 2. Connect to DB ───────────────────────────────────────
-    if not Path(DB_PATH).exists():
+    if not Path(db_path).exists():
         raise FileNotFoundError(
-            f"\n  Database not found:\n  {DB_PATH}\n"
+            f"\n  Database not found:\n  {db_path}\n"
             f"  Run pipeline.py first to create the database.\n"
         )
 
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
 
@@ -215,7 +221,7 @@ def run():
     print("=" * 60)
     print(f"  Matched + updated  : {matched}")
     print(f"  In CSV, not in DB  : {not_found}")
-    print(f"  Database           : {DB_PATH}")
+    print(f"  Database           : {db_path}")
     print()
     print("  Open DB Browser → Browse Data → select 'zoho_view'")
     print("  to see sno | Ticket ID | Order ID | file_name | ...")
