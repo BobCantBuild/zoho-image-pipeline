@@ -459,8 +459,8 @@ default_date_range = None
 if len(dates) > 0:
     default_date_range = (dates.min().date(), dates.max().date())
 
-count_col, branch_col, date_col, prev_col, next_col, export_col = st.columns(
-    [2.2, 1.8, 3.2, 1, 1, 2.2],
+branch_col, date_col, prev_col, next_col, export_col = st.columns(
+    [1.8, 3.2, 1, 1, 2.2],
     vertical_alignment="bottom",
 )
 
@@ -526,9 +526,6 @@ if search:
 filt = filt.reset_index(drop=True)
 total_pages = max(1, (len(filt) - 1) // PAGE_SIZE + 1)
 
-with count_col:
-    st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>', unsafe_allow_html=True)
-
 with prev_col:
     prev_btn = st.button("‹ Prev", use_container_width=True)
 
@@ -567,6 +564,8 @@ with export_col:
                        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
                        file_name="zoho_export.csv", mime="text/csv",
                        use_container_width=True)
+
+st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>', unsafe_allow_html=True)
 
 # Page state (kept in session_state, so Prev/Next works without a number input)
 page = int(st.session_state.get("page", 1))
