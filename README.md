@@ -1,105 +1,88 @@
-# Zoho Forms Pipeline  —  Tesseract + OpenCV
+# Zoho Image Pipeline (OCR → Dashboard)
 
-## Why Tesseract? (vs EasyOCR / Gemini)
+End-to-end pipeline to:
+1) OCR images from Zoho Forms uploads (File Order ID + Star rating)
+2) Merge Zoho CSV metadata (Added Time, Branch, Ticket ID, Zoho Order ID)
+3) Publish a Streamlit dashboard (local + Streamlit Cloud) that always shows the same data
 
-| Engine      | RAM      | Load time | Per image | Your laptop |
-|-------------|----------|-----------|-----------|-------------|
-| EasyOCR     | ~1.5 GB  | 15–30 s   | 3–8 s     | Overheats   |
-| Gemini API  | 0 MB     | —         | 2–5 s     | Rate-limited|
-| **Tesseract** | **~50 MB** | **0.1 s** | **0.3–1 s** | **Cool + fast** |
+## Repo layout
 
-5321 folders × 2 images = ~10,642 images  
-Tesseract at 1 image/sec × 4 workers = **~45 minutes total**
+- `pipeline.py` — scans folders, runs OCR, writes SQLite (`zoho_pipeline.db`)
+- `ocr_engine.py` — RapidOCR + OpenCV extraction logic
+- `image_preprocess.py` — image cleanup helpers for OCR
+- `merge_csv.py` — merges Zoho CSV fields into SQLite (`added_time`, `branch`, `ticket_id`, `csv_order_id`)
+- `sync_to_github.py` — exports SQLite → `data/zoho_latest.csv` and pushes to GitHub
+- `dashboard.py` — Streamlit UI (reads SQLite locally, reads CSV on Streamlit Cloud)
+- `streamlit_app.py` — Streamlit Cloud entrypoint (runs `dashboard.py`)
+- `data/zoho_latest.csv` — the file Streamlit Cloud reads (auto-updated)
 
----
+## 0 → Hero (local)
 
-## Step 1 — Install Tesseract Binary (one time)
+### 1) Configure paths
+Edit `config.py`:
+- `BASE_DIR` — folder that contains one subfolder per record (each with `ImageUpload/` + `ImageUpload1/`)
+- `DB_PATH` — where SQLite is stored
+- `ZOHO_CSV_PATH` — your Zoho export CSV (Added Time / Branch / Ticket ID / Order ID)
 
-1. Go to: https://github.com/UB-Mannheim/tesseract/wiki
-2. Download: `tesseract-ocr-w64-setup-5.x.x.exe`
-3. Install to: `C:\Program Files\Tesseract-OCR\`  (default path — keep it)
-4. During install, check **"Add to PATH"** ✓
+### 2) Install dependencies
+Streamlit Cloud installs from `requirements.txt`.
+For local dev you can use either `uv` (recommended) or plain `pip`.
 
-Verify it works:
-```
-tesseract --version
-```
-You should see: `tesseract 5.x.x`
+**Option A: uv (recommended)**
+Install uv:
+- `winget install Astral.uv`
+- or `pipx install uv`
 
----
-
-## Step 2 — Install Python packages
-
+Create a venv and install deps:
 ```bash
-pip install pytesseract opencv-python-headless openpyxl
+uv venv
+uv pip install -r requirements.txt
 ```
 
-That's it. No PyTorch. No 1.5GB download. No GPU needed.
-
----
-
-## Step 3 — Run
-
+**Option B: pip**
 ```bash
-# Test with 5 folders first
-python pipeline.py --limit 5
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-# If order ID not showing — see exactly what Tesseract read
-python pipeline.py --limit 5 --fresh --debug
+### 3) Run the pipeline
+```bash
+# test run
+python pipeline.py --limit 5 --fresh
 
-# Full run (auto-resumes if interrupted)
+# full run (auto-resumes)
 python pipeline.py
+```
+At the end, `pipeline.py` automatically runs `merge_csv.py`, so your DB has:
+`added_time`, `branch`, `ticket_id`, `csv_order_id`.
 
-# Export results to Excel
+### 4) Run the dashboard locally
+```bash
+streamlit run dashboard.py
+```
+
+## Streamlit Cloud deployment (sync = guaranteed)
+
+Streamlit Cloud reads `data/zoho_latest.csv` from GitHub.
+After every pipeline run, `sync_to_github.py` exports & pushes that CSV automatically.
+
+If Streamlit Cloud shows old data:
+- Streamlit Cloud → **Clear cache** + **Reboot app**
+- Verify GitHub `main` has the latest `data/zoho_latest.csv`
+
+## Common commands
+
+```bash
+# export to Excel
 python pipeline.py --export
+
+# run just the CSV merge (metadata into DB)
+python merge_csv.py
+
+# run just the GitHub sync (DB → CSV → push)
+python sync_to_github.py
 ```
 
----
-
-## Database Location
-
-```
-C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db
-```
-
-View live with **DB Browser for SQLite** (free): https://sqlitebrowser.org/dl/
-
----
-
-## Flag Reference
-
-| Flag             | Meaning                                        | Excel colour  |
-|------------------|------------------------------------------------|---------------|
-| OK               | Both Order ID and Star found                   | Green         |
-| NO_ORDER_ID      | Could not find Order ID in either image        | Orange        |
-| NO_STAR          | Could not find star rating in either image     | Orange        |
-| LOW_CONF_ORDER   | Order ID found but prefix digits uncertain     | Light blue    |
-| MISSING_IMG1     | ImageUpload folder had no image                | Grey          |
-| MISSING_IMG2     | ImageUpload1 folder had no image               | Grey          |
-| ERROR            | Unexpected crash on this record                | Red           |
-
----
-
-## Order ID Logic
-
-1. Try **Image1** — 5-strategy cascade:
-   - S1: Amazon `405-1234567-7654321` pattern
-   - S2: Clean `OD` + 18 digits
-   - S3: Per-character OCR correction (O→0, D→d, I→1, l→1, S→5…)
-   - S4: Stitch whitespace away, re-match
-   - S5: 15-18 digit block near keyword → prepend OD (flagged LOW_CONF)
-2. Not found → try **Image2**
-3. Still not found → `"Order ID not found in files"`
-
-## Star Rating Logic
-
-1. Try **Image2**:
-   - Tesseract text: "4.5 out of 5", "4 stars", "★★★★☆", "rating: 4"
-   - OpenCV colour blobs: find horizontal strip of uniform yellow/green blobs
-2. Not found → try **Image1**
-3. Still not found → `"Stars not found in files"`
-
-Remark format:
-- `4` — normal
-- `Single - 4` — only the 4th star was coloured (rest black)
-- `Dark - 4` — dark mode screenshot
+## Notes
+- OCR engine is RapidOCR (no Tesseract installation required).

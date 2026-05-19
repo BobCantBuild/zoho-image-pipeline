@@ -4,12 +4,16 @@ Streamlit Cloud recognizes this filename automatically.
 Runs the dashboard application.
 """
 
+from __future__ import annotations
+
 import runpy
-import sys
 from pathlib import Path
 
-# Get the directory of this file
-app_dir = Path(__file__).parent
 
-# Run dashboard.py in current namespace
-runpy.run_path(str(app_dir / "dashboard.py"), run_name="__main__")
+def main() -> None:
+    app_dir = Path(__file__).parent
+    runpy.run_path(str(app_dir / "dashboard.py"), run_name="__main__")
+
+
+if __name__ == "__main__":
+    main()

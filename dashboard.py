@@ -106,6 +106,15 @@ div[data-testid="stButton"] button {
   white-space:nowrap !important;
 }
 
+/* Clear (X) buttons look better as icon buttons */
+button[kind="secondary"] {
+  padding:0 !important;
+}
+button[kind="secondary"] span {
+  font-size:16px !important;
+  line-height:1 !important;
+}
+
 /* Table */
 .ztable { width:100%; border-collapse:collapse; }
 .ztable thead tr { background:#f1f5f9; }
@@ -475,7 +484,7 @@ with branch_col:
             key="branch_filter",
         )
     with b2:
-        if st.button("✕", key="branch_clear", use_container_width=True):
+        if st.button("✕", key="branch_clear", use_container_width=True, type="secondary"):
             if "branch_filter" in st.session_state:
                 del st.session_state["branch_filter"]
             st.cache_data.clear()
@@ -492,7 +501,7 @@ with date_col:
             key="date_range",
         )
     with d2:
-        if st.button("✕", key="date_clear", use_container_width=True):
+        if st.button("✕", key="date_clear", use_container_width=True, type="secondary"):
             if "date_range" in st.session_state:
                 del st.session_state["date_range"]
             st.cache_data.clear()
@@ -527,10 +536,10 @@ filt = filt.reset_index(drop=True)
 total_pages = max(1, (len(filt) - 1) // PAGE_SIZE + 1)
 
 with prev_col:
-    prev_btn = st.button("‹ Prev", use_container_width=True)
+    prev_btn = st.button("‹ Prev", use_container_width=True, type="secondary")
 
 with next_col:
-    next_btn = st.button("Next ›", use_container_width=True)
+    next_btn = st.button("Next ›", use_container_width=True, type="secondary")
 
 with export_col:
     exp_cols = [

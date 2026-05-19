@@ -113,7 +113,8 @@ def process_record(rec: dict, debug: bool = False) -> dict:
     if not oid:
         rem_o = "Order ID not found in files"
         flags.append("NO_ORDER_ID")
-    elif eng_o == "tesseract_partial":
+    # Legacy compatibility (older engine labels)
+    if eng_o in {"tesseract_partial", "partial"}:
         flags.append("LOW_CONF_ORDER")
 
     out.update(file_order_id=oid, remarks_file_order_id=rem_o, ocr_engine_order=eng_o)
@@ -164,7 +165,7 @@ def _bar(done: int, total: int, w: int = 30) -> str:
 def _header(total: int, skipped: int):
     print()
     print(f"{BD}{'='*68}{R}")
-    print(f"{BD}  ZOHO FORMS IMAGE PIPELINE  —  Tesseract + OpenCV{R}")
+    print(f"{BD}  ZOHO FORMS IMAGE PIPELINE  —  RapidOCR + OpenCV{R}")
     print(f"{'='*68}")
     print(f"  {CY}Database  :{R} {DB_PATH}")
     print(f"  To process: {total:,}   Already done: {skipped:,}   Workers: {OCR_WORKERS}")
@@ -272,7 +273,7 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False):
 # =============================================================
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Zoho Forms Pipeline — Tesseract + OpenCV")
+    ap = argparse.ArgumentParser(description="Zoho Forms Pipeline — RapidOCR + OpenCV")
     ap.add_argument("--limit",  type=int,           help="Process only N folders")
     ap.add_argument("--fresh",  action="store_true", help="Clear DB + reprocess all")
     ap.add_argument("--debug",  action="store_true", help="Print raw OCR text per image")
