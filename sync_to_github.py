@@ -5,9 +5,8 @@
 #  Exports SQLite → data/zoho_latest.csv → git commit → git push
 #
 #  ONE-TIME SETUP (run once, then never again):
-#    1. pip install gitpython
-#    2. Set GITHUB_REPO_PATH below to your local repo folder
-#    3. Make sure `git push` works from that folder without password
+#    1. Ensure `git` is installed and available on PATH
+#    2. Make sure `git push` works from this repo without password
 #       (use a Personal Access Token saved in Windows Credential Manager)
 #
 #  After that: runs silently every time pipeline finishes. No human needed.
@@ -19,14 +18,15 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime
+from config import DB_PATH as CONFIG_DB_PATH
 
 logger = logging.getLogger(__name__)
 
 # ── CONFIG ────────────────────────────────────────────────────
-DB_PATH        = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
-REPO_PATH      = r"C:\myfiles\IFB\Project\IT\Zoho-Code-Claude-WithoutGem"
-CSV_EXPORT_DIR = "data"          # subfolder inside repo
-CSV_FILENAME   = "zoho_latest.csv"
+DB_PATH = os.environ.get("ZOHOPIPE_DB_PATH") or str(CONFIG_DB_PATH)
+REPO_PATH = os.environ.get("ZOHOPIPE_REPO_PATH") or str(Path(__file__).resolve().parent)
+CSV_EXPORT_DIR = "data"  # subfolder inside repo
+CSV_FILENAME = "zoho_latest.csv"
 # ─────────────────────────────────────────────────────────────
 
 
@@ -65,35 +65,45 @@ def export_db_to_csv(csv_path: Path):
     return len(rows)
 
 
+def _run_git(repo: Path, args: list[str]) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Git command failed: git {' '.join(args)}\n"
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    return (result.stdout or "").strip()
+
+
 def git_push(repo: Path, csv_rel: str, row_count: int):
     """Stage the CSV, commit, push."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg       = f"auto: update dashboard data — {row_count} records [{timestamp}]"
 
-    def run(cmd):
-        result = subprocess.run(
-            cmd, cwd=str(repo), capture_output=True, text=True, shell=True
+    # Refuse to commit/push from a detached HEAD (common cause of "pushed but not deployed")
+    branch = _run_git(repo, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if branch.strip().upper() == "HEAD":
+        raise RuntimeError(
+            "Repo is in detached HEAD state. Checkout your deployment branch "
+            "(e.g. `main`) before running the pipeline sync."
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Git command failed: {cmd}\n{result.stderr.strip()}"
-            )
-        return result.stdout.strip()
 
-    run(f'git add "{csv_rel}"')
+    _run_git(repo, ["add", csv_rel])
 
     # Check if there's actually a diff before committing
-    status = subprocess.run(
-        "git diff --cached --name-only",
-        cwd=str(repo), capture_output=True, text=True, shell=True
-    ).stdout.strip()
+    status = _run_git(repo, ["diff", "--cached", "--name-only"]).strip()
 
     if not status:
         logger.info("sync_to_github: CSV unchanged — skipping commit")
         return
 
-    run(f'git commit -m "{msg}"')
-    run("git push")
+    _run_git(repo, ["commit", "-m", msg])
+    _run_git(repo, ["push"])
     logger.info("sync_to_github: pushed %d rows to GitHub", row_count)
     print(f"  [GitHub] Synced {row_count:,} records → public dashboard updated ✓")
 

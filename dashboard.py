@@ -239,7 +239,7 @@ def load_data() -> tuple:
         df = pd.read_csv(CSV_PATH, encoding="utf-8-sig", dtype=str)
 
         # Derive stats from CSV
-        pf = df.get("pipeline_flag", pd.Series())
+        pf = df.get("pipeline_flag", pd.Series(dtype=str))
         stats = {
             "total":    len(df),
             "pending":  int((pf == "PENDING").sum()),
@@ -252,7 +252,8 @@ def load_data() -> tuple:
 
         if not df.empty:
             df = compute_flags(df)
-            return df, "☁️  Cloud — GitHub CSV (auto-synced from pipeline)", stats
+            mtime = time.strftime("%d %b %Y  %H:%M", time.localtime(CSV_PATH.stat().st_mtime))
+            return df, f"☁️  Cloud — GitHub CSV (zoho_latest.csv • updated {mtime})", stats
 
     return pd.DataFrame(), "⚠️  No data source found", {}
 
@@ -262,6 +263,27 @@ def load_data() -> tuple:
 # =============================================================
 
 df, source_label, stats = load_data()
+
+if st.button("🔄 Refresh data"):
+    st.cache_data.clear()
+    st.rerun()
+
+with st.expander("🧪 Diagnostics", expanded=False):
+    st.write("App file:", str(Path(__file__).resolve()))
+    st.write("OS:", os.name)
+    st.write("DB_PATH:", str(DB_PATH), "exists:", Path(DB_PATH).exists())
+    st.write("CSV_PATH:", str(CSV_PATH), "exists:", CSV_PATH.exists())
+    if CSV_PATH.exists():
+        st.write("CSV bytes:", CSV_PATH.stat().st_size)
+        st.write("CSV mtime:", time.strftime("%d %b %Y %H:%M:%S", time.localtime(CSV_PATH.stat().st_mtime)))
+        try:
+            preview = pd.read_csv(CSV_PATH, encoding="utf-8-sig", dtype=str).head(5)
+            st.write("CSV preview (top 5 rows):")
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.error(f"CSV read failed: {e}")
+    data_dir = CSV_PATH.parent
+    st.write("data/ listing:", [p.name for p in data_dir.glob('*')] if data_dir.exists() else "(missing)")
 
 total   = max(stats.get("total",   1), 1)
 pending = stats.get("pending", 0)
