@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS zoho_records (
     sno                    INTEGER PRIMARY KEY AUTOINCREMENT,
     ticket_id              TEXT,
     csv_order_id           TEXT,
+    added_time             TEXT,
+    branch                 TEXT,
     file_name              TEXT    NOT NULL UNIQUE,
     image1_path            TEXT,
     image2_path            TEXT,

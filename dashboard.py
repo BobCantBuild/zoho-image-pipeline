@@ -194,6 +194,16 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_posting_date(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise `added_time` into a sortable date column for calendar-like filtering."""
+    if "added_time" not in df.columns:
+        df["added_time"] = ""
+    dt = pd.to_datetime(df["added_time"], errors="coerce", utc=False)
+    df["date_of_posting"] = dt.dt.date
+    df["date_of_posting_str"] = dt.dt.strftime("%d %b %Y")
+    return df
+
+
 # =============================================================
 #  DATA SOURCE  — SQLite locally, CSV on cloud
 # =============================================================
@@ -207,7 +217,7 @@ def load_data() -> tuple:
         try:
             conn = sqlite3.connect(DB_PATH)
             df = pd.read_sql_query("""
-                SELECT sno, ticket_id,
+                SELECT sno, added_time, branch, ticket_id,
                        csv_order_id AS Zoho_order_ID,
                        file_order_id, file_star, file_name,
                        flag AS pipeline_flag,
@@ -218,18 +228,17 @@ def load_data() -> tuple:
             # Stats from DB
             q = lambda s: conn.execute(s).fetchone()[0]
             stats = {
-                "total":    q("SELECT COUNT(*) FROM zoho_records"),
-                "pending":  q("SELECT COUNT(*) FROM zoho_records WHERE flag='PENDING'"),
-                "ok":       q("SELECT COUNT(*) FROM zoho_records WHERE flag='OK'"),
-                "no_order": q("SELECT COUNT(*) FROM zoho_records WHERE file_order_id IS NULL AND flag!='PENDING'"),
-                "no_star":  q("SELECT COUNT(*) FROM zoho_records WHERE file_star IS NULL AND flag!='PENDING'"),
-                "low_conf": q("SELECT COUNT(*) FROM zoho_records WHERE flag LIKE '%LOW_CONF%'"),
-                "errors":   q("SELECT COUNT(*) FROM zoho_records WHERE flag='ERROR'"),
+                "total":          q("SELECT COUNT(*) FROM zoho_records"),
+                "pending":        q("SELECT COUNT(*) FROM zoho_records WHERE flag='PENDING'"),
+                "ok":             q("SELECT COUNT(*) FROM zoho_records WHERE flag='OK'"),
+                "orders_found":   q("SELECT COUNT(*) FROM zoho_records WHERE file_order_id IS NOT NULL AND flag!='PENDING'"),
+                "stars_found":    q("SELECT COUNT(*) FROM zoho_records WHERE file_star IS NOT NULL AND flag!='PENDING'"),
             }
             conn.close()
 
             if not df.empty:
                 df = compute_flags(df)
+                df = add_posting_date(df)
                 return df, "🖥️  Live — SQLite database", stats
         except Exception as e:
             pass   # fall through to CSV
@@ -244,14 +253,13 @@ def load_data() -> tuple:
             "total":    len(df),
             "pending":  int((pf == "PENDING").sum()),
             "ok":       int((pf == "OK").sum()),
-            "no_order": int(df["file_order_id"].isna().sum() if "file_order_id" in df else 0),
-            "no_star":  int(df["file_star"].isna().sum()     if "file_star"     in df else 0),
-            "low_conf": int(pf.str.contains("LOW_CONF", na=False).sum()),
-            "errors":   int((pf == "ERROR").sum()),
+            "orders_found": int(df["file_order_id"].notna().sum() if "file_order_id" in df else 0),
+            "stars_found":  int(df["file_star"].notna().sum()     if "file_star"     in df else 0),
         }
 
         if not df.empty:
             df = compute_flags(df)
+            df = add_posting_date(df)
             mtime = time.strftime("%d %b %Y  %H:%M", time.localtime(CSV_PATH.stat().st_mtime))
             return df, f"☁️  Cloud — GitHub CSV (zoho_latest.csv • updated {mtime})", stats
 
@@ -331,10 +339,9 @@ st.markdown(
     + mcard(stats.get("total",    0), "Total Records",  "#0f172a")
     + mcard(stats.get("pending",  0), "Processing",     "#d97706")
     + mcard(stats.get("ok",       0), "Completed OK",   "#16a34a")
-    + mcard(stats.get("no_order", 0), "No Order ID",    "#dc2626")
-    + mcard(stats.get("no_star",  0), "No Star Rating", "#7c3aed")
-    + mcard(stats.get("low_conf", 0), "Low Confidence", "#2563eb")
-    + mcard(stats.get("errors",   0), "Errors",         "#be123c")
+    + mcard(stats.get("orders_found", 0), "File orders detected", "#2563eb")
+    + mcard(stats.get("stars_found",  0), "Star rating counted",  "#7c3aed")
+    + mcard(int((df.get("Flag", pd.Series(dtype=str)) == "YES").sum()) if not df.empty else 0, "Flag", "#dc2626")
     + '</div>', unsafe_allow_html=True)
 
 
@@ -407,9 +414,33 @@ with fc4:
 with fc5:
     st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
     if st.button("✕  Clear All Filters", use_container_width=True):
-        for k in ["search_box","ff1","ff2","ff3","ff4"]:
+        for k in ["search_box","ff1","ff2","ff3","ff4","branch_filter","date_range"]:
             if k in st.session_state: del st.session_state[k]
         st.cache_data.clear(); st.rerun()
+
+bc1, bc2 = st.columns([1, 2])
+
+with bc1:
+    st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
+    if "branch" in df.columns:
+        branches = sorted({(b or "").strip() for b in df["branch"].fillna("").tolist()} - {""})
+    else:
+        branches = []
+    branch_filter = st.selectbox("", ["All", *branches], label_visibility="collapsed", key="branch_filter")
+
+with bc2:
+    st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
+    if "date_of_posting" in df.columns:
+        dates = pd.to_datetime(df["date_of_posting"], errors="coerce").dropna()
+    else:
+        dates = pd.Series([], dtype="datetime64[ns]")
+
+    if len(dates) > 0:
+        min_d = dates.min().date()
+        max_d = dates.max().date()
+        date_range = st.date_input("", value=(min_d, max_d), label_visibility="collapsed", key="date_range")
+    else:
+        date_range = st.date_input("", value=None, label_visibility="collapsed", key="date_range")
 
 
 # =============================================================
@@ -426,6 +457,15 @@ if order_filter != "All": filt = filt[filt["Order_ID_Flag"]  == order_filter]
 if star_filter  != "All": filt = filt[filt["file_star_flag"] == star_filter]
 if pipe_key     != "All":
     filt = filt[filt["pipeline_flag"].fillna("").str.contains(pipe_key)]
+if "branch" in filt.columns and branch_filter != "All":
+    filt = filt[filt["branch"].fillna("") == branch_filter]
+if "date_of_posting" in filt.columns and isinstance(date_range, (tuple, list)) and len(date_range) == 2:
+    d0, d1 = date_range
+    if d0 and d1:
+        filt = filt[
+            (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date >= d0)
+            & (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date <= d1)
+        ]
 if search:
     s = search.lower()
     filt = filt[
@@ -460,11 +500,33 @@ with pc3:
 with pd3:
     next_btn = st.button("Next ›", use_container_width=True)
 with pe:
-    exp_cols = ["sno","ticket_id","Zoho_order_ID","file_order_id",
-                "Order_ID_Flag","file_star","file_star_flag","Flag","file_name"]
+    exp_cols = [
+        "sno",
+        "date_of_posting_str",
+        "branch",
+        "ticket_id",
+        "Zoho_order_ID",
+        "file_order_id",
+        "Order_ID_Flag",
+        "file_star",
+        "file_star_flag",
+        "file_name",
+        "Flag",
+    ]
     exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
-    exp_df.columns = ["#","Ticket ID","Zoho Order ID","File Order ID",
-                      "Order ID Flag","File Star","Star Flag","FLAG","File Name"][: len(exp_df.columns)]
+    exp_df.columns = [
+        "#",
+        "Date of Posting",
+        "Branch",
+        "Ticket ID",
+        "Zoho Order ID",
+        "File Order ID",
+        "Order ID Match",
+        "Star Rating",
+        "Star ≥ 4",
+        "File Name",
+        "✦ FLAG",
+    ][: len(exp_df.columns)]
     st.download_button("⬇️ Export to CSV",
                        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
                        file_name="zoho_export.csv", mime="text/csv",
@@ -487,6 +549,8 @@ for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
     rows_html += f"""
     <tr>
       <td class="num">{i}</td>
+      <td class="mono">{safe(row.get('date_of_posting_str',''))}</td>
+      <td class="mono">{safe(row.get('branch',''))}</td>
       <td class="mono">{safe(row.get('ticket_id',''))}</td>
       <td class="mono">{safe(row.get('Zoho_order_ID',''))}</td>
       <td class="mono">{safe(row.get('file_order_id',''))}</td>
@@ -503,6 +567,8 @@ st.markdown(f"""
   <table class="ztable">
     <thead><tr>
       <th style="width:56px;text-align:center">#</th>
+      <th>Date of Posting</th>
+      <th>Branch</th>
       <th>Ticket ID</th>
       <th>Zoho Order ID</th>
       <th>File Order ID</th>

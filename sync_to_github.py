@@ -39,6 +39,8 @@ def export_db_to_csv(csv_path: Path):
     rows = conn.execute("""
         SELECT
             sno,
+            added_time,
+            branch,
             ticket_id,
             csv_order_id        AS Zoho_order_ID,
             file_order_id,

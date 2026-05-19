@@ -38,7 +38,7 @@ def clean_filename(raw: str) -> str:
 
 
 def add_columns_if_missing(conn: sqlite3.Connection):
-    """Add Ticket_ID and Order_ID columns to zoho_records if not there."""
+    """Add Ticket/Order/Branch/Added Time columns to zoho_records if not there."""
     existing = [row[1] for row in conn.execute("PRAGMA table_info(zoho_records)")]
     if "ticket_id" not in existing:
         conn.execute("ALTER TABLE zoho_records ADD COLUMN ticket_id TEXT")
@@ -46,6 +46,12 @@ def add_columns_if_missing(conn: sqlite3.Connection):
     if "csv_order_id" not in existing:
         conn.execute("ALTER TABLE zoho_records ADD COLUMN csv_order_id TEXT")
         print("  [DB] Added column: csv_order_id")
+    if "added_time" not in existing:
+        conn.execute("ALTER TABLE zoho_records ADD COLUMN added_time TEXT")
+        print("  [DB] Added column: added_time")
+    if "branch" not in existing:
+        conn.execute("ALTER TABLE zoho_records ADD COLUMN branch TEXT")
+        print("  [DB] Added column: branch")
     conn.commit()
 
 
@@ -78,9 +84,9 @@ def read_csv(csv_path: str) -> list:
 
 def find_columns(rows: list) -> tuple:
     """
-    Find the actual column names for File name, Ticket ID, Order ID.
+    Find the actual column names for File name, Ticket ID, Order ID, Added Time, Branch.
     Case-insensitive, handles slight name variations.
-    Returns (file_col, ticket_col, order_col).
+    Returns (file_col, ticket_col, order_col, added_time_col, branch_col).
     """
     if not rows:
         raise ValueError("CSV is empty")
@@ -98,11 +104,15 @@ def find_columns(rows: list) -> tuple:
     file_col   = find(["file name", "file_name", "filename", "file"])
     ticket_col = find(["ticket id", "ticket_id", "ticketid", "ticket"])
     order_col  = find(["order id", "order_id", "orderid", "order"])
+    added_col  = find(["added time", "added_time", "date of posting", "date_of_posting", "posting date"])
+    branch_col = find(["branch"])
 
     missing = []
     if not file_col:   missing.append("'File name'")
     if not ticket_col: missing.append("'Ticket ID'")
     if not order_col:  missing.append("'Order ID'")
+    if not added_col:  missing.append("'Added Time'")
+    if not branch_col: missing.append("'Branch'")
 
     if missing:
         raise ValueError(
@@ -112,8 +122,9 @@ def find_columns(rows: list) -> tuple:
         )
 
     print(f"  [CSV] Mapped  →  file='{file_col}'  "
-          f"ticket='{ticket_col}'  order='{order_col}'")
-    return file_col, ticket_col, order_col
+          f"ticket='{ticket_col}'  order='{order_col}'  "
+          f"added='{added_col}'  branch='{branch_col}'")
+    return file_col, ticket_col, order_col, added_col, branch_col
 
 
 def run(csv_path: str | None = None, db_path: str | None = None):
@@ -127,19 +138,26 @@ def run(csv_path: str | None = None, db_path: str | None = None):
     db_path = db_path or DB_PATH
 
     rows = read_csv(csv_path)
-    file_col, ticket_col, order_col = find_columns(rows)
+    file_col, ticket_col, order_col, added_col, branch_col = find_columns(rows)
 
-    # Build lookup dict:  clean_filename → {ticket_id, csv_order_id}
+    # Build lookup dict:  clean_filename → {ticket_id, csv_order_id, added_time, branch}
     lookup = {}
     skipped = 0
     for row in rows:
         fname   = clean_filename(row.get(file_col, ""))
         ticket  = (row.get(ticket_col) or "").strip()
         orderid = (row.get(order_col)  or "").strip()
+        added   = (row.get(added_col)  or "").strip()
+        branch  = (row.get(branch_col) or "").strip()
         if not fname:
             skipped += 1
             continue
-        lookup[fname] = {"ticket_id": ticket, "csv_order_id": orderid}
+        lookup[fname] = {
+            "ticket_id": ticket,
+            "csv_order_id": orderid,
+            "added_time": added,
+            "branch": branch,
+        }
 
     print(f"  [CSV] Valid file name rows : {len(lookup)}")
     if skipped:
@@ -174,7 +192,9 @@ def run(csv_path: str | None = None, db_path: str | None = None):
             conn.execute(
                 """UPDATE zoho_records
                    SET ticket_id    = :ticket_id,
-                       csv_order_id = :csv_order_id
+                       csv_order_id = :csv_order_id,
+                       added_time   = :added_time,
+                       branch       = :branch
                    WHERE file_name  = :file_name""",
                 {**data, "file_name": fname}
             )
@@ -193,6 +213,8 @@ def run(csv_path: str | None = None, db_path: str | None = None):
         CREATE VIEW zoho_view AS
         SELECT
             sno,
+            added_time,
+            branch,
             ticket_id,
             csv_order_id,
             file_name,
