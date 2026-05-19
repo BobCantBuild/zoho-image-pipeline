@@ -91,6 +91,21 @@ div[data-testid="stStatusWidget"] { display:none !important; }
   text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px;
 }
 
+/* Uniform control row sizing (prevents overlap/misalignment) */
+div[data-baseweb="select"] > div { min-height:46px !important; }
+div[data-baseweb="input"] > div { min-height:46px !important; }
+div[data-testid="stDateInput"] div[data-baseweb="input"] { min-height:46px !important; }
+div[data-testid="stDownloadButton"] button,
+div[data-testid="stButton"] button {
+  height:46px !important;
+  padding:0 16px !important;
+  border-radius:12px !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  white-space:nowrap !important;
+}
+
 /* Table */
 .ztable { width:100%; border-collapse:collapse; }
 .ztable thead tr { background:#f1f5f9; }
@@ -377,7 +392,7 @@ st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file or
               label_visibility="collapsed", key="search_box")
 search = st.session_state.get("search_box", "")
 
-fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1, 1, 1, 1])
+fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
 
 PIPE_OPTIONS = [
     "All — Show everything",
@@ -444,11 +459,14 @@ default_date_range = None
 if len(dates) > 0:
     default_date_range = (dates.min().date(), dates.max().date())
 
-count_col, branch_col, date_col, prev_col, next_col, export_col = st.columns([2.2, 1.6, 2.6, 1, 1, 2])
+count_col, branch_col, date_col, prev_col, next_col, export_col = st.columns(
+    [2.2, 1.8, 3.2, 1, 1, 2.2],
+    vertical_alignment="bottom",
+)
 
 with branch_col:
     st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
-    b1, b2 = st.columns([6, 1])
+    b1, b2 = st.columns([5, 1], vertical_alignment="bottom")
     with b1:
         branch_filter = st.selectbox(
             "",
@@ -465,7 +483,7 @@ with branch_col:
 
 with date_col:
     st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
-    d1, d2 = st.columns([10, 1])
+    d1, d2 = st.columns([8, 1], vertical_alignment="bottom")
     with d1:
         date_range = st.date_input(
             "",
