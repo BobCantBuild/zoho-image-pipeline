@@ -1,10 +1,18 @@
 # =============================================================
 #  dashboard.py  —  Zoho Pipeline Dashboard
-#  Run:  streamlit run dashboard.py
-#  Host: streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
+#
+#  LOCAL:   streamlit run dashboard.py
+#  PUBLIC:  Deploy to share.streamlit.io → permanent link
+#
+#  Data source:
+#    - If running locally  → reads from SQLite DB directly
+#    - If running on cloud → reads from data/zoho_latest.csv
+#      (auto-updated by pipeline.py via sync_to_github.py)
+#
+#  Zero manual work. Pipeline finishes → data auto-appears.
 # =============================================================
 
-import sqlite3, time, re
+import sqlite3, time, re, os
 from pathlib import Path
 import streamlit as st
 import pandas as pd
@@ -16,116 +24,115 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-DB_PATH = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
+# ── Paths ─────────────────────────────────────────────────────
+DB_PATH  = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
+CSV_PATH = Path(__file__).parent / "data" / "zoho_latest.csv"
 
 # =============================================================
-#  CSS  — large text, fixed card heights, no glitch
+#  CSS
 # =============================================================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 html, body, [class*="css"] { font-family:'Inter',sans-serif !important; }
 #MainMenu, footer, header  { visibility:hidden; }
-.block-container { padding:2rem 2.5rem 3rem !important; max-width:100% !important; }
+.block-container { padding:2.2rem 2.8rem 3rem !important; max-width:100% !important; }
+div[data-testid="stStatusWidget"] { display:none !important; }
 
-/* ── Metric cards — ALL same fixed size ── */
-.cards-row { display:flex; gap:14px; margin-bottom:20px; }
+/* Top bar */
+.topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);
+  border-radius:16px; padding:24px 30px; margin-bottom:28px;
+}
+.topbar-title { font-size:30px; font-weight:800; color:#ffffff; line-height:1.15; }
+.topbar-sub   { font-size:16px; color:#93c5fd; margin-top:5px; }
+.topbar-badge {
+  background:rgba(255,255,255,.18); border-radius:8px;
+  padding:6px 14px; font-size:14px; color:#e0f2fe;
+  margin-top:10px; display:inline-block; font-weight:600;
+}
+.topbar-time { font-size:15px; color:#bfdbfe; text-align:right; }
+.topbar-tval { font-size:20px; font-weight:700; color:#fff; margin-bottom:4px; }
+
+/* Cards */
+.cards-row { display:flex; gap:16px; margin-bottom:24px; }
 .mcard {
-  flex:1; min-width:0;
-  background:#fff;
-  border:1.5px solid #e2e8f0;
-  border-radius:14px;
-  padding:20px 16px 18px;
-  text-align:center;
-  height:110px;
-  display:flex; flex-direction:column;
+  flex:1; min-width:0; background:#fff;
+  border:2px solid #e2e8f0; border-radius:16px;
+  padding:22px 12px 20px; text-align:center;
+  height:120px; display:flex; flex-direction:column;
   justify-content:center; align-items:center;
-  box-shadow:0 2px 6px rgba(0,0,0,.05);
+  box-shadow:0 2px 8px rgba(0,0,0,.06);
 }
-.mcard-val   { font-size:36px; font-weight:800; line-height:1; }
+.mcard-val   { font-size:38px; font-weight:800; line-height:1; }
 .mcard-label { font-size:13px; font-weight:600; color:#64748b;
-               text-transform:uppercase; letter-spacing:.05em; margin-top:7px; }
+               text-transform:uppercase; letter-spacing:.06em; margin-top:8px; }
 
-/* ── Progress bar ── */
-.prog-wrap { margin:6px 0 22px; }
-.prog-label { font-size:14px; font-weight:600; color:#334155; margin-bottom:6px; }
-.prog-track { background:#e2e8f0; border-radius:99px; height:10px; overflow:hidden; }
+/* Progress */
+.prog-wrap  { margin:4px 0 24px; }
+.prog-title { font-size:16px; font-weight:700; color:#1e293b; margin-bottom:8px; }
+.prog-track { background:#e2e8f0; border-radius:99px; height:12px; overflow:hidden; }
 .prog-fill  { height:100%; border-radius:99px;
-              background:linear-gradient(90deg,#3b82f6,#6366f1);
-              transition:width .5s ease; }
-.prog-sub   { font-size:13px; color:#64748b; margin-top:5px; }
+              background:linear-gradient(90deg,#3b82f6,#6366f1); }
+.prog-sub   { font-size:14px; color:#64748b; margin-top:6px; }
 
-/* ── Section heading ── */
+/* Section heading */
 .sec-head {
-  font-size:15px; font-weight:700; color:#0f172a;
-  border-left:4px solid #6366f1; padding-left:12px;
-  margin:8px 0 16px;
+  font-size:17px; font-weight:800; color:#0f172a;
+  border-left:5px solid #6366f1; padding-left:13px;
+  margin:8px 0 14px; letter-spacing:-.01em;
 }
 
-/* ── Filter bar ── */
-.filter-bar {
-  background:#f8fafc; border:1.5px solid #e2e8f0;
-  border-radius:12px; padding:14px 18px; margin-bottom:16px;
+/* Filter labels */
+.filter-label {
+  font-size:13px; font-weight:700; color:#475569;
+  text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px;
 }
 
-/* ── Table ── */
+/* Table */
 .ztable { width:100%; border-collapse:collapse; }
 .ztable thead tr { background:#f1f5f9; }
 .ztable thead th {
-  padding:13px 14px; text-align:left;
-  font-size:13px; font-weight:700; color:#334155;
-  text-transform:uppercase; letter-spacing:.06em;
-  white-space:nowrap; border-bottom:2px solid #e2e8f0;
+  padding:14px 16px; text-align:left; font-size:13px;
+  font-weight:700; color:#334155; text-transform:uppercase;
+  letter-spacing:.07em; white-space:nowrap;
+  border-bottom:2px solid #e2e8f0;
 }
 .ztable tbody tr { border-bottom:1px solid #f1f5f9; }
 .ztable tbody tr:hover { background:#f8fafc; }
-.ztable td {
-  padding:11px 14px; font-size:14px;
-  color:#1e293b; vertical-align:middle; white-space:nowrap;
-}
-.ztable td.mono { font-family:monospace; font-size:13px; }
+.ztable td { padding:13px 16px; font-size:15px; color:#1e293b;
+             vertical-align:middle; white-space:nowrap; }
+.ztable td.mono { font-family:monospace; font-size:14px; }
 .ztable td.ctr  { text-align:center; }
-.ztable td.num  { text-align:center; color:#94a3b8; font-size:13px; }
+.ztable td.num  { text-align:center; color:#94a3b8; font-size:14px; }
 
-/* ── Badges ── */
-.badge {
-  display:inline-block; padding:4px 14px; border-radius:99px;
-  font-size:13px; font-weight:700; letter-spacing:.03em;
-}
-.b-yes  { background:#dcfce7; color:#15803d; }
-.b-no   { background:#fee2e2; color:#b91c1c; }
+/* Badges */
+.badge { display:inline-block; padding:5px 16px; border-radius:99px;
+         font-size:14px; font-weight:700; letter-spacing:.02em; }
+.b-yes { background:#dcfce7; color:#15803d; }
+.b-no  { background:#fee2e2; color:#b91c1c; }
 
-/* ── Top bar ── */
-.topbar { display:flex; align-items:center;
-          justify-content:space-between; margin-bottom:26px; }
-.topbar-title { font-size:22px; font-weight:800; color:#0f172a; }
-.topbar-sub   { font-size:14px; color:#64748b; margin-top:2px; }
-.topbar-time  { font-size:13px; color:#94a3b8; }
-
-/* ── Inputs larger ── */
+/* Inputs */
 div[data-testid="stTextInput"] input {
-  font-size:14px !important; border-radius:8px !important;
-  border:1.5px solid #e2e8f0 !important; padding:8px 12px !important;
+  font-size:15px !important; border-radius:10px !important;
+  border:2px solid #e2e8f0 !important; padding:10px 14px !important;
 }
 div[data-testid="stSelectbox"] > div > div {
-  font-size:14px !important; border-radius:8px !important;
+  font-size:15px !important; border-radius:10px !important;
 }
 div[data-testid="stDownloadButton"] button,
 div[data-testid="stButton"] button {
-  font-size:14px !important; font-weight:600 !important;
-  border-radius:8px !important; padding:8px 20px !important;
+  font-size:15px !important; font-weight:700 !important;
+  border-radius:10px !important; padding:10px 22px !important;
 }
-
-/* ── Pagination info ── */
-.pag-info { font-size:14px; color:#64748b; padding-top:9px; }
-
-/* ── Footer ── */
-.footer { text-align:center; font-size:13px; color:#cbd5e1; margin-top:28px; }
-.footer code { font-size:12px; }
-
-/* ── Kill streamlit rerun flash ── */
-div[data-testid="stStatusWidget"] { display:none !important; }
+.pag-info { font-size:15px; color:#64748b; padding-top:10px; }
+.source-pill {
+  display:inline-block; background:#f1f5f9; border:1px solid #e2e8f0;
+  border-radius:8px; padding:4px 12px; font-size:13px; color:#475569;
+  font-weight:600; margin-bottom:20px;
+}
+.footer { text-align:center; font-size:13px; color:#cbd5e1; margin-top:30px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -135,68 +142,47 @@ div[data-testid="stStatusWidget"] { display:none !important; }
 # =============================================================
 
 def normalise_oid(raw: str) -> str:
-    """Normalise order ID for comparison: strip #, fix 0D→OD, uppercase."""
-    if not raw:
-        return ""
+    if not raw: return ""
     s = str(raw).strip().lstrip("#").strip()
     s = re.sub(r"\s+", "", s).upper()
-    s = re.sub(r"^0D", "OD", s)       # 0D → OD  (OCR misread)
+    s = re.sub(r"^0D", "OD", s)
     return s
 
-
-def badge(val: str) -> str:
+def badge(val):
     if val == "YES": return '<span class="badge b-yes">✓ YES</span>'
     if val == "NO":  return '<span class="badge b-no">✕ NO</span>'
     return f'<span class="badge">{val}</span>'
 
-
-def star_html(val) -> str:
+def star_html(val):
     try:
         n = float(val)
-        filled = int(n)
-        s = "★" * filled + "☆" * (5 - filled)
+        s = "★" * int(n) + "☆" * (5 - int(n))
         c = "#f59e0b" if n >= 4 else "#94a3b8"
-        return (f'<span style="color:{c};font-size:17px">{s}</span>'
-                f'<span style="color:#64748b;font-size:13px;margin-left:6px">'
-                f'{n:.1f}</span>')
+        return (f'<span style="color:{c};font-size:19px">{s}</span>'
+                f'<span style="color:#64748b;font-size:14px;margin-left:7px">{n:.1f}</span>')
     except:
-        return '<span style="color:#cbd5e1;font-size:14px">—</span>'
+        return '<span style="color:#cbd5e1;font-size:15px">—</span>'
 
-
-def safe(val) -> str:
+def safe(val):
     v = str(val or "").strip()
-    if v in ("", "None", "nan", "NaN"):
-        return '<span style="color:#cbd5e1">—</span>'
-    return v
+    return '<span style="color:#cbd5e1">—</span>' if v in ("","None","nan","NaN") else v
 
+def flag_cell(val):
+    bg = "#dcfce7" if val == "YES" else "#fee2e2"
+    return f'<td class="ctr" style="background:{bg}">{badge(val)}</td>'
 
-# =============================================================
-#  DATA
-# =============================================================
-
-@st.cache_data(ttl=10)
-def load_data() -> pd.DataFrame:
-    if not Path(DB_PATH).exists():
-        return pd.DataFrame()
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("""
-        SELECT sno, ticket_id, csv_order_id, file_order_id,
-               file_star, file_name, flag AS pipeline_flag
-        FROM zoho_records ORDER BY sno
-    """, conn)
-    conn.close()
-    if df.empty:
-        return df
-
-    df["Zoho_order_ID"] = df["csv_order_id"].fillna("")
+def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """Add Order_ID_Flag, file_star_flag, Flag columns."""
+    df["Zoho_order_ID"] = df.get("Zoho_order_ID",
+                          df.get("csv_order_id", pd.Series([""] * len(df)))).fillna("")
 
     def order_flag(r):
-        z = normalise_oid(r["Zoho_order_ID"])
-        f = normalise_oid(r["file_order_id"] or "")
+        z = normalise_oid(r.get("Zoho_order_ID",""))
+        f = normalise_oid(r.get("file_order_id","") or "")
         return "YES" if z and f and z == f else "NO"
 
     def star_flag(r):
-        try:    return "YES" if float(r["file_star"]) >= 4 else "NO"
+        try:    return "YES" if float(r.get("file_star", 0)) >= 4 else "NO"
         except: return "NO"
 
     df["Order_ID_Flag"]  = df.apply(order_flag, axis=1)
@@ -207,189 +193,259 @@ def load_data() -> pd.DataFrame:
     return df
 
 
+# =============================================================
+#  DATA SOURCE  — SQLite locally, CSV on cloud
+# =============================================================
+
 @st.cache_data(ttl=10)
-def load_stats() -> dict:
-    if not Path(DB_PATH).exists():
-        return {}
-    conn = sqlite3.connect(DB_PATH)
-    q = lambda s: conn.execute(s).fetchone()[0]
-    out = {
-        "total":    q("SELECT COUNT(*) FROM zoho_records"),
-        "pending":  q("SELECT COUNT(*) FROM zoho_records WHERE flag='PENDING'"),
-        "ok":       q("SELECT COUNT(*) FROM zoho_records WHERE flag='OK'"),
-        "no_order": q("SELECT COUNT(*) FROM zoho_records WHERE file_order_id IS NULL AND flag!='PENDING'"),
-        "no_star":  q("SELECT COUNT(*) FROM zoho_records WHERE file_star IS NULL AND flag!='PENDING'"),
-        "low_conf": q("SELECT COUNT(*) FROM zoho_records WHERE flag LIKE '%LOW_CONF%'"),
-        "errors":   q("SELECT COUNT(*) FROM zoho_records WHERE flag='ERROR'"),
-    }
-    conn.close()
-    return out
+def load_data() -> tuple:
+    """Returns (dataframe, source_label, stats_dict)."""
+
+    # ── Try SQLite first (local machine) ──────────────────────
+    if Path(DB_PATH).exists():
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            df = pd.read_sql_query("""
+                SELECT sno, ticket_id,
+                       csv_order_id AS Zoho_order_ID,
+                       file_order_id, file_star, file_name,
+                       flag AS pipeline_flag,
+                       remarks_file_order_id, remarks_file_star
+                FROM zoho_records ORDER BY sno
+            """, conn)
+
+            # Stats from DB
+            q = lambda s: conn.execute(s).fetchone()[0]
+            stats = {
+                "total":    q("SELECT COUNT(*) FROM zoho_records"),
+                "pending":  q("SELECT COUNT(*) FROM zoho_records WHERE flag='PENDING'"),
+                "ok":       q("SELECT COUNT(*) FROM zoho_records WHERE flag='OK'"),
+                "no_order": q("SELECT COUNT(*) FROM zoho_records WHERE file_order_id IS NULL AND flag!='PENDING'"),
+                "no_star":  q("SELECT COUNT(*) FROM zoho_records WHERE file_star IS NULL AND flag!='PENDING'"),
+                "low_conf": q("SELECT COUNT(*) FROM zoho_records WHERE flag LIKE '%LOW_CONF%'"),
+                "errors":   q("SELECT COUNT(*) FROM zoho_records WHERE flag='ERROR'"),
+            }
+            conn.close()
+
+            if not df.empty:
+                df = compute_flags(df)
+                return df, "🖥️  Live — SQLite database", stats
+        except Exception as e:
+            pass   # fall through to CSV
+
+    # ── Fallback: CSV from repo (cloud / shared access) ───────
+    if CSV_PATH.exists():
+        df = pd.read_csv(CSV_PATH, encoding="utf-8-sig", dtype=str)
+
+        # Derive stats from CSV
+        pf = df.get("pipeline_flag", pd.Series())
+        stats = {
+            "total":    len(df),
+            "pending":  int((pf == "PENDING").sum()),
+            "ok":       int((pf == "OK").sum()),
+            "no_order": int(df["file_order_id"].isna().sum() if "file_order_id" in df else 0),
+            "no_star":  int(df["file_star"].isna().sum()     if "file_star"     in df else 0),
+            "low_conf": int(pf.str.contains("LOW_CONF", na=False).sum()),
+            "errors":   int((pf == "ERROR").sum()),
+        }
+
+        if not df.empty:
+            df = compute_flags(df)
+            return df, "☁️  Cloud — GitHub CSV (auto-synced from pipeline)", stats
+
+    return pd.DataFrame(), "⚠️  No data source found", {}
+
+
+# =============================================================
+#  LOAD
+# =============================================================
+
+df, source_label, stats = load_data()
+
+total   = max(stats.get("total",   1), 1)
+pending = stats.get("pending", 0)
+done    = total - pending
+pct     = done / total * 100
+now_str = time.strftime("%d %b %Y  %H:%M")
 
 
 # =============================================================
 #  TOP BAR
 # =============================================================
 
-stats   = load_stats()
-df      = load_data()
-total   = max(stats.get("total",   1), 1)
-pending = stats.get("pending", 0)
-done    = total - pending
-pct     = done / total * 100
-
-now_str = time.strftime("%d %b %Y  %H:%M")
 st.markdown(f"""
 <div class="topbar">
-  <div>
-    <div class="topbar-title">📦 &nbsp;Zoho Review Pipeline</div>
-    <div class="topbar-sub">Image Processing &amp; Order Verification Dashboard</div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <span style="font-size:42px">📦</span>
+    <div>
+      <div class="topbar-title">Zoho Review Pipeline</div>
+      <div class="topbar-sub">Image Processing &amp; Order Verification Dashboard</div>
+      <div class="topbar-badge">
+        {"⚡ Pipeline running — auto-refreshing every 10 s"
+         if pending > 0 else "✅ Pipeline complete — all records processed"}
+      </div>
+    </div>
   </div>
-  <div class="topbar-time">⏱ &nbsp;{now_str}</div>
+  <div class="topbar-time">
+    <div class="topbar-tval">{now_str}</div>
+    <div>Last refreshed</div>
+    <div style="margin-top:10px;font-size:13px;color:#93c5fd">{source_label}</div>
+  </div>
 </div>""", unsafe_allow_html=True)
 
 
 # =============================================================
-#  METRIC CARDS  — all same fixed height via flex
+#  METRIC CARDS
 # =============================================================
 
 def mcard(val, label, color):
-    return f"""
-    <div class="mcard">
-      <div class="mcard-val" style="color:{color}">{val:,}</div>
-      <div class="mcard-label">{label}</div>
-    </div>"""
+    return (f'<div class="mcard">'
+            f'<div class="mcard-val" style="color:{color}">{val:,}</div>'
+            f'<div class="mcard-label">{label}</div></div>')
 
-cards_html = (
+st.markdown(
     '<div class="cards-row">'
-    + mcard(stats.get("total",    0), "Total",        "#0f172a")
-    + mcard(stats.get("pending",  0), "Processing",   "#d97706")
-    + mcard(stats.get("ok",       0), "Completed",    "#16a34a")
-    + mcard(stats.get("no_order", 0), "No Order ID",  "#dc2626")
-    + mcard(stats.get("no_star",  0), "No Star",      "#7c3aed")
-    + mcard(stats.get("low_conf", 0), "Low Conf",     "#2563eb")
-    + mcard(stats.get("errors",   0), "Errors",       "#be123c")
-    + '</div>'
-)
-st.markdown(cards_html, unsafe_allow_html=True)
+    + mcard(stats.get("total",    0), "Total Records",  "#0f172a")
+    + mcard(stats.get("pending",  0), "Processing",     "#d97706")
+    + mcard(stats.get("ok",       0), "Completed OK",   "#16a34a")
+    + mcard(stats.get("no_order", 0), "No Order ID",    "#dc2626")
+    + mcard(stats.get("no_star",  0), "No Star Rating", "#7c3aed")
+    + mcard(stats.get("low_conf", 0), "Low Confidence", "#2563eb")
+    + mcard(stats.get("errors",   0), "Errors",         "#be123c")
+    + '</div>', unsafe_allow_html=True)
 
 
 # =============================================================
-#  PROGRESS BAR
+#  PROGRESS + REFRESH
 # =============================================================
 
-st.markdown(f"""
-<div class="prog-wrap">
-  <div class="prog-label">Pipeline Progress &nbsp;
-    <span style="font-weight:400;color:#64748b">
-      {done:,} of {total:,} records completed
-    </span>
-  </div>
-  <div class="prog-track">
-    <div class="prog-fill" style="width:{pct:.2f}%"></div>
-  </div>
-  <div class="prog-sub">{pct:.1f}% done
-    {"&nbsp;·&nbsp; ⚡ Auto-refreshing every 10 s" if pending > 0
-     else "&nbsp;·&nbsp; ✅ Pipeline complete"}
-  </div>
-</div>""", unsafe_allow_html=True)
+rc, pc2 = st.columns([1, 8])
+with rc:
+    if st.button("⟳ Refresh", use_container_width=True):
+        st.cache_data.clear(); st.rerun()
+with pc2:
+    st.markdown(f"""
+    <div class="prog-wrap">
+      <div class="prog-title">Pipeline Progress &nbsp;
+        <span style="font-weight:500;color:#64748b;font-size:15px">
+          {done:,} of {total:,} records &nbsp;·&nbsp; {pct:.1f}% complete
+        </span>
+      </div>
+      <div class="prog-track">
+        <div class="prog-fill" style="width:{pct:.2f}%"></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
 
 # =============================================================
 #  FILTERS
 # =============================================================
 
-st.markdown('<div class="sec-head">Records</div>', unsafe_allow_html=True)
+st.markdown('<div class="sec-head">Filter &amp; Search Records</div>',
+            unsafe_allow_html=True)
 
-fa, fb, fc, fd, fe, ff = st.columns([3, 1.2, 1.2, 1.2, 1.2, 1.2])
-with fa: search       = st.text_input("", placeholder="🔍  Search file name, order ID, ticket…",
-                                       label_visibility="collapsed")
-with fb: flag_filter  = st.selectbox("", ["All","YES","NO"],
-                                      label_visibility="collapsed",
-                                      key="f1",
-                                      help="Overall FLAG")
-with fc: order_filter = st.selectbox("", ["All","YES","NO"],
-                                      label_visibility="collapsed",
-                                      key="f2",
-                                      help="Order ID Match")
-with fd: star_filter  = st.selectbox("", ["All","YES","NO"],
-                                      label_visibility="collapsed",
-                                      key="f3",
-                                      help="Star ≥ 4")
-with fe: pipe_filter  = st.selectbox("", ["All","OK","PENDING","ERROR",
-                                          "NO_ORDER_ID","NO_STAR","LOW_CONF_ORDER"],
-                                      label_visibility="collapsed",
-                                      key="f4",
-                                      help="Processing status")
-with ff:
-    if st.button("✕ Clear", use_container_width=True):
+st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file order ID or ticket ID…",
+              label_visibility="collapsed", key="search_box")
+search = st.session_state.get("search_box", "")
+
+fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1, 1, 1, 1])
+
+PIPE_OPTIONS = [
+    "All — Show everything",
+    "OK — Fully processed",
+    "PENDING — Still running",
+    "ERROR — Failed records",
+    "NO_ORDER_ID — Order ID not found in image",
+    "NO_STAR — Star rating not found in image",
+    "LOW_CONF_ORDER — Low confidence match (verify manually)",
+]
+
+with fc1:
+    st.markdown('<div class="filter-label">✦ Overall FLAG</div>',
+                unsafe_allow_html=True)
+    flag_filter = st.selectbox("", ["All","YES","NO"],
+                               label_visibility="collapsed", key="ff1")
+with fc2:
+    st.markdown('<div class="filter-label">🔗 Order ID Match</div>',
+                unsafe_allow_html=True)
+    order_filter = st.selectbox("", ["All","YES","NO"],
+                                label_visibility="collapsed", key="ff2")
+with fc3:
+    st.markdown('<div class="filter-label">⭐ Star Rating ≥ 4</div>',
+                unsafe_allow_html=True)
+    star_filter = st.selectbox("", ["All","YES","NO"],
+                               label_visibility="collapsed", key="ff3")
+with fc4:
+    st.markdown('<div class="filter-label">⚙️ Processing Status</div>',
+                unsafe_allow_html=True)
+    pipe_sel    = st.selectbox("", PIPE_OPTIONS,
+                               label_visibility="collapsed", key="ff4")
+    pipe_key    = pipe_sel.split(" — ")[0].strip()
+with fc5:
+    st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
+    if st.button("✕  Clear All Filters", use_container_width=True):
+        for k in ["search_box","ff1","ff2","ff3","ff4"]:
+            if k in st.session_state: del st.session_state[k]
         st.cache_data.clear(); st.rerun()
 
 
 # =============================================================
-#  FILTER DATA
+#  APPLY FILTERS
 # =============================================================
 
 if df.empty:
-    st.warning("No data found. Run `pipeline.py` first.")
+    st.warning("⚠️  No data available. Run `pipeline.py` to process records.")
     st.stop()
 
 filt = df.copy()
 if flag_filter  != "All": filt = filt[filt["Flag"]           == flag_filter]
 if order_filter != "All": filt = filt[filt["Order_ID_Flag"]  == order_filter]
 if star_filter  != "All": filt = filt[filt["file_star_flag"] == star_filter]
-if pipe_filter  != "All":
-    filt = filt[filt["pipeline_flag"].fillna("").str.contains(pipe_filter)]
+if pipe_key     != "All":
+    filt = filt[filt["pipeline_flag"].fillna("").str.contains(pipe_key)]
 if search:
     s = search.lower()
     filt = filt[
-        filt["file_name"].fillna("").str.lower().str.contains(s)      |
-        filt["file_order_id"].fillna("").str.lower().str.contains(s)  |
-        filt["Zoho_order_ID"].str.lower().str.contains(s)             |
+        filt["file_name"].fillna("").str.lower().str.contains(s)     |
+        filt["file_order_id"].fillna("").str.lower().str.contains(s) |
+        filt["Zoho_order_ID"].fillna("").str.lower().str.contains(s) |
         filt["ticket_id"].fillna("").str.lower().str.contains(s)
     ]
 
 filt = filt.reset_index(drop=True)
 
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+st.markdown('<div class="sec-head">Records</div>', unsafe_allow_html=True)
+
 
 # =============================================================
-#  PAGINATION + EXPORT ROW
+#  PAGINATION + EXPORT
 # =============================================================
 
 PAGE_SIZE   = 50
 total_pages = max(1, (len(filt) - 1) // PAGE_SIZE + 1)
 
-pa, pb, pc, pd_col, pe = st.columns([2, 1, 1, 1, 2])
-
+pa, pb, pc3, pd3, pe = st.columns([3, 1, 1, 1, 2])
 with pa:
-    st.markdown(
-        f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>',
-        unsafe_allow_html=True)
-
+    st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>',
+                unsafe_allow_html=True)
 with pb:
     prev_btn = st.button("‹ Prev", use_container_width=True)
-
-with pc:
+with pc3:
     page = st.number_input("", min_value=1, max_value=total_pages,
                            value=1, label_visibility="collapsed")
-
-with pd_col:
+with pd3:
     next_btn = st.button("Next ›", use_container_width=True)
-
 with pe:
-    exp_df = filt[[
-        "sno","ticket_id","Zoho_order_ID","file_order_id",
-        "Order_ID_Flag","file_star","file_star_flag","Flag","file_name"
-    ]].copy()
-    exp_df.columns = [
-        "#","Ticket ID","Zoho Order ID","File Order ID",
-        "Order ID Flag","File Star","Star Flag","FLAG","File Name"
-    ]
-    st.download_button(
-        "⬇️  Export to CSV",
-        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="zoho_export.csv", mime="text/csv",
-        use_container_width=True,
-    )
+    exp_cols = ["sno","ticket_id","Zoho_order_ID","file_order_id",
+                "Order_ID_Flag","file_star","file_star_flag","Flag","file_name"]
+    exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
+    exp_df.columns = ["#","Ticket ID","Zoho Order ID","File Order ID",
+                      "Order ID Flag","File Star","Star Flag","FLAG","File Name"][: len(exp_df.columns)]
+    st.download_button("⬇️ Export to CSV",
+                       data=exp_df.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="zoho_export.csv", mime="text/csv",
+                       use_container_width=True)
 
 if prev_btn and page > 1:           page = int(page) - 1
 if next_btn and page < total_pages: page = int(page) + 1
@@ -403,31 +459,27 @@ page = int(page)
 start   = (page - 1) * PAGE_SIZE
 page_df = filt.iloc[start: start + PAGE_SIZE]
 
-def flag_cell(val):
-    bg = "#dcfce7" if val == "YES" else "#fee2e2"
-    return f'<td class="ctr" style="background:{bg}">{badge(val)}</td>'
-
 rows_html = ""
 for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
     rows_html += f"""
     <tr>
       <td class="num">{i}</td>
-      <td class="mono">{safe(row['ticket_id'])}</td>
-      <td class="mono">{safe(row['Zoho_order_ID'])}</td>
-      <td class="mono">{safe(row['file_order_id'])}</td>
+      <td class="mono">{safe(row.get('ticket_id',''))}</td>
+      <td class="mono">{safe(row.get('Zoho_order_ID',''))}</td>
+      <td class="mono">{safe(row.get('file_order_id',''))}</td>
       {flag_cell(row['Order_ID_Flag'])}
-      <td class="ctr">{star_html(row['file_star'])}</td>
+      <td class="ctr">{star_html(row.get('file_star',''))}</td>
       {flag_cell(row['file_star_flag'])}
-      <td class="mono" style="color:#64748b;font-size:12px">{safe(row['file_name'])}</td>
+      <td class="mono" style="color:#64748b;font-size:13px">{safe(row.get('file_name',''))}</td>
       {flag_cell(row['Flag'])}
     </tr>"""
 
 st.markdown(f"""
-<div style="border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;
-            box-shadow:0 2px 8px rgba(0,0,0,.06);background:#fff;overflow-x:auto;">
+<div style="border:2px solid #e2e8f0;border-radius:16px;overflow:hidden;
+            box-shadow:0 2px 10px rgba(0,0,0,.07);background:#fff;overflow-x:auto;">
   <table class="ztable">
     <thead><tr>
-      <th style="width:52px;text-align:center">#</th>
+      <th style="width:56px;text-align:center">#</th>
       <th>Ticket ID</th>
       <th>Zoho Order ID</th>
       <th>File Order ID</th>
@@ -440,11 +492,10 @@ st.markdown(f"""
     <tbody>{rows_html}</tbody>
   </table>
 </div>
-<div style="margin-top:10px;font-size:13px;color:#94a3b8;text-align:right">
+<div style="margin-top:10px;font-size:14px;color:#94a3b8;text-align:right">
   Page {page} of {total_pages} &nbsp;·&nbsp;
-  Rows {start+1}–{min(start+PAGE_SIZE, len(filt))} of {len(filt):,}
-</div>
-""", unsafe_allow_html=True)
+  Rows {start+1}–{min(start+PAGE_SIZE,len(filt))} of {len(filt):,}
+</div>""", unsafe_allow_html=True)
 
 
 # =============================================================
@@ -453,12 +504,12 @@ st.markdown(f"""
 
 st.markdown(
     f'<div class="footer">Zoho Review Pipeline &nbsp;·&nbsp; '
-    f'<code>{DB_PATH}</code></div>',
+    f'Data source: {source_label}</div>',
     unsafe_allow_html=True)
 
 
 # =============================================================
-#  AUTO REFRESH
+#  AUTO REFRESH  — only while pipeline running
 # =============================================================
 
 if pending > 0:

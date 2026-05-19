@@ -40,7 +40,7 @@ CY="\033[96m"; BD="\033[1m"
 def _find_image(folder: Path) -> Optional[str]:
     if not folder.exists():
         return None
-    for ext in ("*.jpg","*.jpeg","*.JPG","*.JPEG","*.png","*.PNG","*.webp", "*.JFIF"):
+    for ext in ("*.jpg","*.jpeg","*.JPG","*.JPEG","*.png","*.PNG","*.webp"):
         hits = list(folder.glob(ext))
         if hits:
             return str(hits[0])
@@ -285,3 +285,10 @@ if __name__ == "__main__":
         from export import export_to_excel
         p = export_to_excel()
         if p: print(f"  Exported: {p}")
+
+    # Auto-sync to GitHub → public dashboard updates automatically
+    try:
+        from sync_to_github import sync
+        sync()
+    except Exception as e:
+        print(f"  [GitHub sync skipped]: {e}")
