@@ -214,80 +214,160 @@ def _extract_order_id(text: str) -> tuple:
 
 
 # =============================================================
-#  STAR RATING  —  text first, colour blobs second
+#  STAR RATING  —  Pure OpenCV only. No OCR. No text parsing.
+#
+#  Key insight from real images:
+#  - Image2 is a review/rating screen (Amazon or Flipkart)
+#  - Stars are ALWAYS yellow or green coloured icons
+#  - The OVERALL rating row is:
+#      Amazon  → appears as a single row near top, largest/widest
+#      Flipkart → top row before category breakdowns (cooling, etc.)
+#  - Category rows (cooling, design, etc.) are smaller + lower down
+#  - If Image2 is a bill/invoice → no star blobs found → return None
+#
+#  Algorithm:
+#  1. Build HSV colour mask (yellow + green + dim yellow for dark mode)
+#  2. Find ALL horizontal star-row candidates
+#  3. Pick the TOPMOST row that has 1-5 uniform blobs
+#     (overall rating is always above category ratings)
+#  4. Count filled blobs in that row = star rating
+#  5. Handle single-highlighted star (e.g. only 4th star coloured)
 # =============================================================
 
-def _star_from_text(text: str) -> Optional[float]:
-    """Parse star rating from OCR text."""
-    patterns = [
-        r"(\d+(?:\.\d)?)\s*(?:out\s*of\s*5|/\s*5)",
-        r"(\d+(?:\.\d)?)\s*-?\s*star",
-        r"star[s]?\s*[:\-]?\s*(\d+(?:\.\d)?)",
-        r"rating[s]?\s*[:\-]?\s*(\d+(?:\.\d)?)",
-        r"rated\s+(\d+(?:\.\d)?)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            v = float(m.group(1))
-            if 0 <= v <= 5: return v
-
-    # Unicode star symbols
-    filled = len(re.findall(r"[★⭐]", text))
-    empty  = len(re.findall(r"☆", text))
-    if 0 < filled + empty <= 5:
-        return float(filled)
-    return None
-
-
-def _star_from_image(img_bgr: np.ndarray, meta: dict) -> Optional[float]:
+def _build_star_rows(mask: np.ndarray) -> list:
     """
-    OpenCV colour blob star detection.
-    Finds the most uniform horizontal strip of same-size coloured blobs.
+    Scan the mask and return all candidate star rows as:
+    [(top_y, blob_count, row_width, strip_mask), ...]
+    sorted top-to-bottom (smallest top_y first).
     """
-    mask = meta.get("star_mask")
-    if mask is None or cv2.countNonZero(mask) == 0:
-        return None
+    h, w      = mask.shape
+    slice_h   = max(8, h // 14)   # each scan strip height
+    step      = max(4, slice_h // 3)
+    rows      = []
+    seen_tops = set()
 
-    h, w    = mask.shape
-    slice_h = max(1, h // 12)
-    best_score, best_top = 0.0, -1
-
-    for top in range(0, h - slice_h, max(1, slice_h // 2)):
+    for top in range(0, h - slice_h, step):
         strip = mask[top: top + slice_h, :]
-        if cv2.countNonZero(strip) < 20: continue
-        cnts, _ = cv2.findContours(strip, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        area    = slice_h * w
-        valid   = [c for c in cnts if area * 0.001 < cv2.contourArea(c) < area * 0.30]
-        if not (1 <= len(valid) <= 7): continue
+        px    = cv2.countNonZero(strip)
+        if px < 15:
+            continue
+
+        # Find contours in this strip
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        closed = cv2.morphologyEx(strip, cv2.MORPH_CLOSE, kernel)
+        cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+
+        strip_area = slice_h * w
+        valid = [c for c in cnts
+                 if strip_area * 0.0005 < cv2.contourArea(c) < strip_area * 0.35]
+
+        if not (1 <= len(valid) <= 5):
+            continue
+
+        # Check size uniformity — star icons are same size
         areas  = [cv2.contourArea(c) for c in valid]
-        cv_val = np.std(areas) / np.mean(areas) if np.mean(areas) > 0 else 99
-        score  = len(valid) / (1.0 + cv_val)
-        if score > best_score:
-            best_score, best_top = score, top
+        cv_val = (np.std(areas) / np.mean(areas)) if np.mean(areas) > 0 else 99
+        if cv_val > 0.6:   # too varied → not a star row
+            continue
 
-    if best_top < 0 or best_score < 0.3:
-        return None
+        # Measure span width of blobs (leftmost to rightmost centroid)
+        xs = []
+        for c in valid:
+            M = cv2.moments(c)
+            if M["m00"] > 0:
+                xs.append(int(M["m10"] / M["m00"]))
+        if not xs:
+            continue
+        row_width = max(xs) - min(xs) if len(xs) > 1 else int(np.sqrt(areas[0]))
 
-    strip  = mask[best_top: best_top + slice_h, :]
+        # Avoid duplicates (same row detected in overlapping strips)
+        bucket = top // slice_h
+        if bucket in seen_tops:
+            continue
+        seen_tops.add(bucket)
+
+        rows.append((top, len(valid), row_width, strip))
+
+    # Sort top-to-bottom
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
+def _count_filled_blobs(strip: np.ndarray) -> int:
+    """Count star blobs in a strip after morphological close."""
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     closed = cv2.morphologyEx(strip, cv2.MORPH_CLOSE, kernel)
-    cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    total   = strip.shape[0] * strip.shape[1]
-    valid   = [c for c in cnts if total * 0.001 < cv2.contourArea(c) < total * 0.40]
-    n       = len(valid)
-    return float(n) if 1 <= n <= 5 else None
+    cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE)
+    total = strip.shape[0] * strip.shape[1]
+    valid = [c for c in cnts
+             if total * 0.0005 < cv2.contourArea(c) < total * 0.40]
+    return len(valid)
 
 
-def _star_remark(star: float, meta: dict, mask) -> str:
+def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
+    """
+    Detect star rating using pure OpenCV colour analysis.
+
+    Returns (star_count: float | None, method: str)
+    method is one of: 'top_row', 'widest_row', 'single', 'none'
+    """
+    mask = meta.get("star_mask")
+    if mask is None or cv2.countNonZero(mask) < 15:
+        return None, "none"
+
+    rows = _build_star_rows(mask)
+    if not rows:
+        return None, "none"
+
+    # ── Strategy A: use TOPMOST valid row (overall rating is always first) ──
+    top_y, blob_count, row_width, strip = rows[0]
+
+    n = _count_filled_blobs(strip)
+    if 1 <= n <= 5:
+        # Check for single-highlighted star pattern:
+        # If only 1 blob found but multiple rows exist below with more blobs,
+        # the overall rating may be indicated by a single coloured star
+        # (e.g. 4th star highlighted, rest unfilled/black)
+        if n == 1 and len(rows) > 1:
+            # Look at total coloured pixel span to estimate position
+            # of the highlighted star among 5 positions
+            xs = []
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            closed = cv2.morphologyEx(strip, cv2.MORPH_CLOSE, kernel)
+            cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+            for c in cnts:
+                M = cv2.moments(c)
+                if M["m00"] > 0:
+                    xs.append(int(M["m10"] / M["m00"]))
+            if xs:
+                # Estimate star position from its x location within image width
+                h_img, w_img = mask.shape
+                star_x  = xs[0]
+                # Assume 5-star row spans ~30% of image width, starting at ~5%
+                star_pos = round((star_x / w_img) * 5)
+                star_pos = max(1, min(5, star_pos))
+                return float(star_pos), "single"
+
+        return float(n), "top_row"
+
+    # ── Strategy B: if top row failed, pick WIDEST row (most prominent) ──
+    if len(rows) > 1:
+        widest = max(rows, key=lambda r: r[2])
+        n = _count_filled_blobs(widest[3])
+        if 1 <= n <= 5:
+            return float(n), "widest_row"
+
+    return None, "none"
+
+
+def _star_remark(star: float, meta: dict, method: str) -> str:
+    """Build remark string per spec."""
     n = int(star) if star == int(star) else star
-    # Detect single-highlighted star
-    if mask is not None:
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        total   = mask.shape[0] * mask.shape[1]
-        valid   = [c for c in cnts if cv2.contourArea(c) > total * 0.0004]
-        if len(valid) == 1 and star > 1:
-            return f"Single - {n}"
+    if method == "single":
+        return f"Single - {n}"
     if meta.get("is_dark_mode"):
         return f"Dark - {n}"
     return str(n)
@@ -318,34 +398,24 @@ def extract_order_id(image_path: str) -> tuple:
 
 
 def extract_star_rating(image_path: str) -> tuple:
-    """Returns (star | None, remark, engine)."""
+    """
+    Returns (star | None, remark, engine).
+    Pure OpenCV — no OCR, no text parsing for stars.
+    """
     try:
         img, meta = preprocess_for_stars(image_path)
     except Exception as e:
         return None, f"Image error: {e}", "none"
 
-    # Method 1: text (most reliable)
     try:
-        text, _ = _run_ocr(img)
-        star = _star_from_text(text)
+        star, method = _star_from_image(img, meta)
         if star is not None:
-            mask   = meta.get("star_mask")
-            remark = _star_remark(star, meta, mask)
-            return star, remark, "rapidocr_text"
-    except Exception as e:
-        logger.debug("Text star error: %s", e)
-
-    # Method 2: colour blobs
-    try:
-        star = _star_from_image(img, meta)
-        if star is not None:
-            mask   = meta.get("star_mask")
-            remark = _star_remark(star, meta, mask)
-            return star, remark, "opencv_color"
+            remark = _star_remark(star, meta, method)
+            return star, remark, f"opencv_{method}"
     except Exception as e:
         logger.debug("CV star error: %s", e)
 
-    return None, "", "none"
+    return None, "Stars not found in image", "none"
 
 
 def get_raw_ocr(image_path: str) -> str:

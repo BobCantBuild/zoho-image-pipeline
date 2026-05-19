@@ -40,7 +40,7 @@ CY="\033[96m"; BD="\033[1m"
 def _find_image(folder: Path) -> Optional[str]:
     if not folder.exists():
         return None
-    for ext in ("*.jpg","*.jpeg","*.JPG","*.JPEG","*.png","*.PNG","*.webp"):
+    for ext in ("*.jpg","*.jpeg","*.JPG","*.JPEG","*.png","*.PNG","*.webp", "*.JFIF"):
         hits = list(folder.glob(ext))
         if hits:
             return str(hits[0])
