@@ -137,6 +137,7 @@ button[kind="secondary"] span {
          font-size:14px; font-weight:700; letter-spacing:.02em; }
 .b-yes { background:#dcfce7; color:#15803d; }
 .b-no  { background:#fee2e2; color:#b91c1c; }
+.b-und { background:#f1f5f9; color:#64748b; }
 
 /* Inputs */
 div[data-testid="stTextInput"] {
@@ -185,8 +186,9 @@ def normalise_oid(raw: str) -> str:
     return s
 
 def badge(val):
-    if val == "YES": return '<span class="badge b-yes">✓ YES</span>'
-    if val == "NO":  return '<span class="badge b-no">✕ NO</span>'
+    if val == "YES":       return '<span class="badge b-yes">✓ YES</span>'
+    if val == "NO":        return '<span class="badge b-no">✕ NO</span>'
+    if val == "Undefined": return '<span class="badge b-und">Undefined</span>'
     return f'<span class="badge">{val}</span>'
 
 def star_html(val):
@@ -204,7 +206,9 @@ def safe(val):
     return '<span style="color:#cbd5e1">—</span>' if v in ("","None","nan","NaN") else v
 
 def flag_cell(val):
-    bg = "#dcfce7" if val == "YES" else "#fee2e2"
+    if val == "YES":       bg = "#dcfce7"
+    elif val == "NO":      bg = "#fee2e2"
+    else:                  bg = "#f1f5f9"
     return f'<td class="ctr" style="background:{bg}">{badge(val)}</td>'
 
 def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
@@ -215,17 +219,31 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
     def order_flag(r):
         z = normalise_oid(r.get("Zoho_order_ID",""))
         f = normalise_oid(r.get("file_order_id","") or "")
-        return "YES" if z and f and z == f else "NO"
+        if not f:
+            return "Undefined"
+        if not z:
+            return "Undefined"
+        return "YES" if z == f else "NO"
 
     def star_flag(r):
-        try:    return "YES" if float(r.get("file_star", 0)) >= 4 else "NO"
-        except: return "NO"
+        val = r.get("file_star", None)
+        if val is None or str(val).strip() in ("", "None", "nan", "NaN"):
+            return "Undefined"
+        try:    return "YES" if float(val) >= 4 else "NO"
+        except: return "Undefined"
 
-    df["Order_ID_Flag"]  = df.apply(order_flag, axis=1)
-    df["file_star_flag"] = df.apply(star_flag,  axis=1)
-    df["Flag"] = df.apply(
-        lambda r: "YES" if r["Order_ID_Flag"]  == "YES"
-                        and r["file_star_flag"] == "YES" else "NO", axis=1)
+    def verified_flag(r):
+        oid  = r["Order_ID_Flag"]
+        star = r["file_star_flag"]
+        if oid == "YES" and star == "YES":
+            return "YES"
+        if oid == "NO" or star == "NO":
+            return "NO"
+        return "Undefined"
+
+    df["Order_ID_Flag"]  = df.apply(order_flag,     axis=1)
+    df["file_star_flag"] = df.apply(star_flag,       axis=1)
+    df["Flag"]           = df.apply(verified_flag,   axis=1)
     return df
 
 
@@ -355,7 +373,7 @@ st.markdown(
     + mcard(stats.get("ok",       0), "Completed OK",   "#16a34a")
     + mcard(stats.get("orders_found", 0), "File orders detected", "#2563eb")
     + mcard(stats.get("stars_found",  0), "Star rating counted",  "#7c3aed")
-    + mcard(int((df.get("Flag", pd.Series(dtype=str)) == "YES").sum()) if not df.empty else 0, "Flag", "#dc2626")
+    + mcard(int((df.get("Flag", pd.Series(dtype=str)) == "YES").sum()) if not df.empty else 0, "Verified", "#dc2626")
     + '</div>', unsafe_allow_html=True)
 
 
@@ -406,19 +424,19 @@ PIPE_OPTIONS = [
 ]
 
 with fc1:
-    st.markdown('<div class="filter-label">✦ Overall FLAG</div>',
+    st.markdown('<div class="filter-label">✦ Verified</div>',
                 unsafe_allow_html=True)
-    flag_filter = st.selectbox("", ["All","YES","NO"],
+    flag_filter = st.selectbox("", ["All","YES","NO","Undefined"],
                                label_visibility="collapsed", key="ff1")
 with fc2:
     st.markdown('<div class="filter-label">🔗 Order ID Match</div>',
                 unsafe_allow_html=True)
-    order_filter = st.selectbox("", ["All","YES","NO"],
+    order_filter = st.selectbox("", ["All","YES","NO","Undefined"],
                                 label_visibility="collapsed", key="ff2")
 with fc3:
     st.markdown('<div class="filter-label">⭐ Star Rating ≥ 4</div>',
                 unsafe_allow_html=True)
-    star_filter = st.selectbox("", ["All","YES","NO"],
+    star_filter = st.selectbox("", ["All","YES","NO","Undefined"],
                                label_visibility="collapsed", key="ff3")
 with fc4:
     st.markdown('<div class="filter-label">⚙️ Processing Status</div>',
@@ -559,7 +577,7 @@ with export_col:
         "Star Rating",
         "Star ≥ 4",
         "File Name",
-        "✦ FLAG",
+        "Verified",
     ][: len(exp_df.columns)]
     st.download_button("⬇️ Export to CSV",
                        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
@@ -617,7 +635,7 @@ st.markdown(f"""
       <th style="text-align:center">Star Rating</th>
       <th style="text-align:center">Star ≥ 4</th>
       <th>File Name</th>
-      <th style="text-align:center">✦ FLAG</th>
+      <th style="text-align:center">✦ Verified</th>
     </tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
