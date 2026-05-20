@@ -82,7 +82,7 @@ div[data-testid="stStatusWidget"] { display:none !important; }
 .sec-head {
   font-size:17px; font-weight:800; color:#0f172a;
   border-left:5px solid #6366f1; padding-left:13px;
-  margin:8px 0 14px; letter-spacing:-.01em;
+  margin:16px 0 12px; letter-spacing:-.01em;
 }
 
 /* Filter labels */
@@ -139,9 +139,13 @@ button[kind="secondary"] span {
 .b-no  { background:#fee2e2; color:#b91c1c; }
 
 /* Inputs */
+div[data-testid="stTextInput"] {
+  width:100% !important;
+}
 div[data-testid="stTextInput"] input {
   font-size:15px !important; border-radius:10px !important;
-  border:2px solid #e2e8f0 !important; padding:10px 14px !important;
+  border:2px solid #e2e8f0 !important; padding:12px 16px !important;
+  width:100% !important; min-height:46px !important;
 }
 div[data-testid="stSelectbox"] > div > div {
   font-size:15px !important; border-radius:10px !important;
