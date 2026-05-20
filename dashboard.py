@@ -87,33 +87,30 @@ div[data-testid="stStatusWidget"] { display:none !important; }
 
 /* Filter labels */
 .filter-label {
-  font-size:13px; font-weight:700; color:#475569;
-  text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px;
+  font-size:11px; font-weight:700; color:#475569;
+  text-transform:uppercase; letter-spacing:.07em; margin-bottom:3px;
 }
 
-/* Uniform control row sizing (prevents overlap/misalignment) */
-div[data-baseweb="select"] > div { min-height:46px !important; }
-div[data-baseweb="input"] > div { min-height:46px !important; }
-div[data-testid="stDateInput"] div[data-baseweb="input"] { min-height:46px !important; }
+/* Uniform control row sizing — compact */
+div[data-baseweb="select"] > div { min-height:36px !important; font-size:13px !important; }
+div[data-baseweb="select"] span  { font-size:13px !important; }
+div[data-baseweb="input"] > div  { min-height:36px !important; font-size:13px !important; }
+div[data-testid="stDateInput"] div[data-baseweb="input"] { min-height:36px !important; }
 div[data-testid="stDownloadButton"] button,
 div[data-testid="stButton"] button {
-  height:46px !important;
-  padding:0 16px !important;
-  border-radius:12px !important;
+  height:36px !important;
+  padding:0 12px !important;
+  border-radius:8px !important;
+  font-size:13px !important;
   display:flex !important;
   align-items:center !important;
   justify-content:center !important;
   white-space:nowrap !important;
 }
 
-/* Clear (X) buttons look better as icon buttons */
-button[kind="secondary"] {
-  padding:0 !important;
-}
-button[kind="secondary"] span {
-  font-size:16px !important;
-  line-height:1 !important;
-}
+/* Clear (X) buttons */
+button[kind="secondary"] { padding:0 !important; }
+button[kind="secondary"] span { font-size:14px !important; line-height:1 !important; }
 
 /* Table */
 .ztable { width:100%; border-collapse:collapse; table-layout:auto; }
@@ -139,27 +136,25 @@ button[kind="secondary"] span {
 .b-no  { background:#fee2e2; color:#b91c1c; }
 .b-und { background:#f1f5f9; color:#64748b; }
 
-/* Inputs */
-div[data-testid="stTextInput"] {
-  width:100% !important;
-}
-div[data-testid="stTextInput"] > div {
-  width:100% !important;
-}
+/* Search input — tight, no extra whitespace */
+div[data-testid="stTextInput"] { width:100% !important; margin-bottom:0 !important; }
+div[data-testid="stTextInput"] > div { width:100% !important; margin-bottom:0 !important; }
 div[data-testid="stTextInput"] input {
-  font-size:16px !important; border-radius:14px !important;
-  border:2.5px solid #94a3b8 !important; padding:14px 20px !important;
-  width:100% !important; min-height:54px !important;
+  font-size:14px !important; border-radius:10px !important;
+  border:2px solid #94a3b8 !important; padding:10px 16px !important;
+  width:100% !important; min-height:42px !important;
   box-sizing:border-box !important;
-  box-shadow:0 1px 4px rgba(0,0,0,.07) !important;
+  box-shadow:0 1px 3px rgba(0,0,0,.06) !important;
 }
 div[data-testid="stTextInput"] input:focus {
   border-color:#6366f1 !important;
-  box-shadow:0 0 0 3px rgba(99,102,241,.15) !important;
+  box-shadow:0 0 0 3px rgba(99,102,241,.12) !important;
+  outline:none !important;
 }
-div[data-testid="stTextInput"] input::placeholder {
-  font-size:15px !important; color:#94a3b8 !important;
-}
+div[data-testid="stTextInput"] input::placeholder { font-size:14px !important; color:#94a3b8 !important; }
+/* Kill Streamlit's injected bottom gap on the text-input widget block */
+div[data-testid="stTextInput"] { padding-bottom:0 !important; }
+div[data-testid="stTextInput"] + div[data-testid="stVerticalBlock"] { margin-top:0 !important; }
 div[data-testid="stSelectbox"] > div > div {
   font-size:15px !important; border-radius:10px !important;
 }
@@ -414,7 +409,7 @@ st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file or
               label_visibility="collapsed", key="search_box")
 search = st.session_state.get("search_box", "")
 
-st.markdown('<div style="margin-bottom:20px;"></div>', unsafe_allow_html=True)
+st.markdown('<div style="margin-bottom:10px;"></div>', unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
 
