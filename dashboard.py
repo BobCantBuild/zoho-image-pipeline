@@ -116,25 +116,25 @@ button[kind="secondary"] span {
 }
 
 /* Table */
-.ztable { width:100%; border-collapse:collapse; }
+.ztable { width:100%; border-collapse:collapse; table-layout:auto; }
 .ztable thead tr { background:#f1f5f9; }
 .ztable thead th {
-  padding:14px 16px; text-align:left; font-size:13px;
+  padding:9px 10px; text-align:left; font-size:11px;
   font-weight:700; color:#334155; text-transform:uppercase;
-  letter-spacing:.07em; white-space:nowrap;
+  letter-spacing:.05em; white-space:nowrap;
   border-bottom:2px solid #e2e8f0;
 }
 .ztable tbody tr { border-bottom:1px solid #f1f5f9; }
 .ztable tbody tr:hover { background:#f8fafc; }
-.ztable td { padding:13px 16px; font-size:15px; color:#1e293b;
+.ztable td { padding:8px 10px; font-size:13px; color:#1e293b;
              vertical-align:middle; white-space:nowrap; }
-.ztable td.mono { font-family:monospace; font-size:14px; }
+.ztable td.mono { font-family:monospace; font-size:12px; }
 .ztable td.ctr  { text-align:center; }
-.ztable td.num  { text-align:center; color:#94a3b8; font-size:14px; }
+.ztable td.num  { text-align:center; color:#94a3b8; font-size:12px; }
 
 /* Badges */
-.badge { display:inline-block; padding:5px 16px; border-radius:99px;
-         font-size:14px; font-weight:700; letter-spacing:.02em; }
+.badge { display:inline-block; padding:3px 10px; border-radius:99px;
+         font-size:12px; font-weight:700; letter-spacing:.02em; }
 .b-yes { background:#dcfce7; color:#15803d; }
 .b-no  { background:#fee2e2; color:#b91c1c; }
 .b-und { background:#f1f5f9; color:#64748b; }
@@ -147,13 +147,18 @@ div[data-testid="stTextInput"] > div {
   width:100% !important;
 }
 div[data-testid="stTextInput"] input {
-  font-size:16px !important; border-radius:12px !important;
-  border:2px solid #e2e8f0 !important; padding:14px 18px !important;
-  width:100% !important; min-height:50px !important;
+  font-size:16px !important; border-radius:14px !important;
+  border:2.5px solid #94a3b8 !important; padding:14px 20px !important;
+  width:100% !important; min-height:54px !important;
   box-sizing:border-box !important;
+  box-shadow:0 1px 4px rgba(0,0,0,.07) !important;
+}
+div[data-testid="stTextInput"] input:focus {
+  border-color:#6366f1 !important;
+  box-shadow:0 0 0 3px rgba(99,102,241,.15) !important;
 }
 div[data-testid="stTextInput"] input::placeholder {
-  font-size:15px !important;
+  font-size:15px !important; color:#94a3b8 !important;
 }
 div[data-testid="stSelectbox"] > div > div {
   font-size:15px !important; border-radius:10px !important;
