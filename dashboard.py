@@ -142,10 +142,17 @@ button[kind="secondary"] span {
 div[data-testid="stTextInput"] {
   width:100% !important;
 }
+div[data-testid="stTextInput"] > div {
+  width:100% !important;
+}
 div[data-testid="stTextInput"] input {
-  font-size:15px !important; border-radius:10px !important;
-  border:2px solid #e2e8f0 !important; padding:12px 16px !important;
-  width:100% !important; min-height:46px !important;
+  font-size:16px !important; border-radius:12px !important;
+  border:2px solid #e2e8f0 !important; padding:14px 18px !important;
+  width:100% !important; min-height:50px !important;
+  box-sizing:border-box !important;
+}
+div[data-testid="stTextInput"] input::placeholder {
+  font-size:15px !important;
 }
 div[data-testid="stSelectbox"] > div > div {
   font-size:15px !important; border-radius:10px !important;
@@ -383,6 +390,8 @@ st.markdown('<div class="sec-head">Records</div>', unsafe_allow_html=True)
 st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file order ID or ticket ID…",
               label_visibility="collapsed", key="search_box")
 search = st.session_state.get("search_box", "")
+
+st.markdown('<div style="margin-bottom:20px;"></div>', unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
 
