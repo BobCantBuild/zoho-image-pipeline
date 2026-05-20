@@ -109,20 +109,28 @@ def preprocess_for_stars(image_path: str) -> tuple:
     
     # ── IMPROVED COLOR RANGES ────────────────────────────────
     # Yellow/gold stars (common in Amazon/Flipkart).
-    # Phone photos often reduce saturation/value; keep bounds permissive and let shape
-    # validation in `ocr_engine.py` reject non-star blobs.
-    mask_y = cv2.inRange(hsv, np.array([18,  60,  80]),  np.array([35,  255, 255]))  # yellow/gold
+    # Keep hue broad, but require decent saturation so we don't pick up white/grey UI.
+    mask_y = cv2.inRange(hsv, np.array([18,  80,  80]),  np.array([35,  255, 255]))  # yellow/gold
     
     # Green stars (some UIs use green filled stars)
-    mask_g = cv2.inRange(hsv, np.array([40,  50,  70]),  np.array([90,  255, 255]))  # green/teal
+    mask_g = cv2.inRange(hsv, np.array([40,  70,  70]),  np.array([95,  255, 255]))  # green/teal
     
     # Dim yellow (dark mode / low exposure)
-    mask_d = cv2.inRange(hsv, np.array([15,  25,  40]),  np.array([40,  180, 180]))  # dim yellow
+    mask_d = cv2.inRange(hsv, np.array([15,  40,  45]),  np.array([40,  220, 220]))  # dim yellow
     
     # Orange stars (warm/gold shading or camera WB shift)
-    mask_o = cv2.inRange(hsv, np.array([0,  60,  70]),  np.array([18,  255, 255]))  # orange
+    mask_o = cv2.inRange(hsv, np.array([0,  80,  70]),  np.array([18,  255, 255]))  # orange
     
     mask   = cv2.bitwise_or(mask_y, cv2.bitwise_or(mask_g, cv2.bitwise_or(mask_d, mask_o)))
+
+    # Final gating on saturation/value to reduce false positives from white/grey UI
+    # and warm lighting. Dark-mode images can be lower saturation.
+    s_min = 55 if dark else 80
+    v_min = 55 if dark else 80
+    sat_ok = (hsv[:, :, 1] >= s_min).astype(np.uint8) * 255
+    val_ok = (hsv[:, :, 2] >= v_min).astype(np.uint8) * 255
+    mask = cv2.bitwise_and(mask, sat_ok)
+    mask = cv2.bitwise_and(mask, val_ok)
     
     # ── MORPHOLOGICAL CLEANUP ─────────────────────────────────
     # Remove noise and fill small gaps in star shapes
@@ -131,5 +139,22 @@ def preprocess_for_stars(image_path: str) -> tuple:
     
     kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)  # fill small holes
+
+    # Remove large masked regions (often phone bezel/skin tone) — we only want star-sized blobs.
+    # This keeps detection stable even with slightly permissive HSV ranges.
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    h, w = mask.shape[:2]
+    max_area = int(h * w * 0.005)  # 0.5% of image is never a star
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+        ww = int(stats[i, cv2.CC_STAT_WIDTH])
+        hh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        too_big = area > max_area
+        too_wide = ww > int(w * 0.40)
+        too_tall = hh > int(h * 0.25)
+        if too_big or too_wide or too_tall:
+            mask[labels == i] = 0
 
     return img, {"is_dark_mode": dark, "star_mask": mask}

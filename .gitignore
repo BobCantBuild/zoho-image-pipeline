@@ -12,3 +12,6 @@ data/star_debug/
 data/_debug_one.csv
 data/_debug_two.csv
 data/_debug_three.csv
+data/star_debug*/
+data/_d*.csv
+data/_debug_*.csv

@@ -323,8 +323,8 @@ def _build_star_rows(mask: np.ndarray) -> list:
     """
     h, w      = mask.shape
     
-    # Focus on upper portion of image (ratings appear near top, not in metadata)
-    max_scan_h = int(h * 0.60)
+    # Focus on upper portion of image; some UIs place rating rows around mid-screen.
+    max_scan_h = int(h * 0.85)
     
     # Each scan strip must be tall enough to contain a full star icon.
     # Too-small strips can slice stars in half and create false contours.
@@ -381,10 +381,13 @@ def _build_star_rows(mask: np.ndarray) -> list:
             continue
         row_width = max(xs) - min(xs) if len(xs) > 1 else int(np.sqrt(areas[0]))
         
-        # Minimum row width to avoid single stray blobs.
-        # For "single highlighted star" UIs, we may only see one filled star: allow narrower.
+        # Row width constraints:
+        # - Avoid single stray blobs (too narrow)
+        # - Avoid 2-blob full-width artifacts (too wide)
         min_row_width = int(w * (0.03 if len(valid) == 1 else 0.08))
         if row_width < min_row_width:
+            continue
+        if len(valid) <= 2 and row_width > int(w * 0.60):
             continue
 
         # Avoid duplicates (same row detected in overlapping strips)
@@ -493,10 +496,79 @@ def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
                     xs.append(int(M["m10"] / M["m00"]))
 
         if xs:
-            h_img, w_img = mask.shape
+            # Prefer geometry from the actual (mostly black) star row, not image-wide heuristics.
+            # In these UIs only 1 star is filled; the other 4 are black outlines/filled.
+            # Detect all 5 stars using edges within the same strip window.
             star_x = xs[0]
-            left = 0.12 * w_img
-            span = 0.76 * w_img
+            top_y, _, _, _ = max(scored, key=lambda r: r[2])
+            # Rebuild the strip window in original image coords to run edge detection.
+            slice_h = strip.shape[0]
+            y0 = int(top_y)
+            y1 = min(img_bgr.shape[0], y0 + slice_h)
+            roi = img_bgr[y0:y1, :, :]
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            edges = cv2.Canny(gray, 50, 150)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            edges = cv2.dilate(edges, k, iterations=1)
+            cnts2, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            h_img, w_img = mask.shape
+            x_centers = []
+            for c in cnts2:
+                x, y, wb, hb = cv2.boundingRect(c)
+                if wb < int(w_img * 0.02) or hb < int(w_img * 0.02):
+                    continue
+                if wb > int(w_img * 0.20) or hb > int(w_img * 0.20):
+                    continue
+                aspect = max(wb, hb) / (min(wb, hb) + 1)
+                if aspect > 2.2:
+                    continue
+                # Keep shapes near the detected filled-star y band (avoid UI icons)
+                if not (0 <= y <= slice_h):
+                    continue
+                x_centers.append(x + wb / 2.0)
+
+            x_centers.sort()
+            # Cluster x centers (stars are evenly spaced; duplicates come from noisy edges).
+            clustered = []
+            for xc in x_centers:
+                if not clustered or abs(xc - clustered[-1]) > int(w_img * 0.03):
+                    clustered.append(xc)
+            if len(clustered) >= 5:
+                # Pick the best 5-star window with the most-uniform spacing.
+                best = None
+                for i in range(0, len(clustered) - 4):
+                    win = clustered[i : i + 5]
+                    diffs = [win[j + 1] - win[j] for j in range(4)]
+                    if any(d <= 0 for d in diffs):
+                        continue
+                    step = float(np.median(diffs))
+                    if not (w_img * 0.03 <= step <= w_img * 0.25):
+                        continue
+                    cv = float(np.std(diffs) / step) if step > 0 else 9.9
+                    if best is None or cv < best[0]:
+                        best = (cv, win)
+                if best is not None:
+                    win = best[1]
+                    # Choose nearest slot center.
+                    idx0 = int(np.argmin([abs(star_x - xc) for xc in win]))
+                    return float(idx0 + 1), "single"
+
+            if len(clustered) >= 3:
+                # Use the median spacing to infer a 5-slot grid.
+                diffs = [clustered[i + 1] - clustered[i] for i in range(len(clustered) - 1)]
+                diffs = [d for d in diffs if d > 0]
+                if diffs:
+                    step = float(np.median(diffs))
+                    left = clustered[0]
+                    idx = int(round((star_x - left) / step)) + 1
+                    idx = max(1, min(5, idx))
+                    return float(idx), "single"
+
+            # Fallback mapping when edge-based grid fails.
+            left = 0.10 * w_img
+            span = 0.80 * w_img
             rel = (star_x - left) / span
             star_pos = round(rel * 5)
             star_pos = max(1, min(5, star_pos))
