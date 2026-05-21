@@ -18,7 +18,7 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(
-    page_title="Zoho Review Pipeline",
+    page_title="Zoho Forms Analysis",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -376,12 +376,11 @@ pct     = done / total * 100
 now_str = time.strftime("%d %b %Y  %H:%M")
 
 # ── Topbar context values ─────────────────────────────────────
-_ok_count = stats.get("ok", 0)
+_sync_txt = CSV_PATH.parent / "last_sync.txt"
 
-# Data sync time: use CSV file mtime on cloud, current time on live SQLite
-if CSV_PATH.exists() and not Path(DB_PATH).exists():
-    _data_sync_str = time.strftime("%d %b %Y  %H:%M",
-                                   time.localtime(CSV_PATH.stat().st_mtime))
+# Data sync time: read the timestamp written by sync_to_github.py (reliable on cloud)
+if _sync_txt.exists():
+    _data_sync_str = _sync_txt.read_text(encoding="utf-8").strip()
     _data_src_chip = "☁️ GitHub CSV"
 elif Path(DB_PATH).exists():
     _data_sync_str = now_str
@@ -390,12 +389,9 @@ else:
     _data_sync_str = "—"
     _data_src_chip = "No data source"
 
-if pending > 0:
-    _badge = (f"⚡ Processing &nbsp;·&nbsp; {done} of {total} done"
-              f" &nbsp;·&nbsp; {pending} pending")
-else:
-    _badge = (f"✅ {done} of {total} verified"
-              f" &nbsp;·&nbsp; {_ok_count} OK &nbsp;·&nbsp; {done - _ok_count} flagged")
+_badge = ("⚡ Pipeline active — processing in progress"
+          if pending > 0 else
+          "✅ Pipeline complete — results up to date")
 
 
 # =============================================================
@@ -407,7 +403,7 @@ st.markdown(f"""
   <div style="display:flex;align-items:center;gap:16px">
     <span style="font-size:42px">🔍</span>
     <div>
-      <div class="topbar-title">Zoho Order Verification</div>
+      <div class="topbar-title">Zoho Forms Analysis</div>
       <div class="topbar-sub">OCR · Image Processing · Order ID &amp; Star Rating Audit</div>
       <div class="topbar-badge">{_badge}</div>
     </div>

@@ -66,6 +66,11 @@ def export_db_to_csv(csv_path: Path):
         writer.writeheader()
         writer.writerows([dict(r) for r in rows])
 
+    # Write exact sync timestamp — file mtime is unreliable on Streamlit Cloud
+    (csv_path.parent / "last_sync.txt").write_text(
+        datetime.now().strftime("%d %b %Y  %H:%M"), encoding="utf-8"
+    )
+
     return len(rows)
 
 
@@ -97,7 +102,7 @@ def git_push(repo: Path, csv_rel: str, row_count: int):
             "(e.g. `main`) before running the pipeline sync."
         )
 
-    _run_git(repo, ["add", csv_rel])
+    _run_git(repo, ["add", csv_rel, f"{CSV_EXPORT_DIR}/last_sync.txt"])
 
     # Check if there's actually a diff before committing
     status = _run_git(repo, ["diff", "--cached", "--name-only"]).strip()
