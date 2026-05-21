@@ -56,19 +56,43 @@ div[data-testid="stStatusWidget"] { display:none !important; }
 .topbar-time { font-size:15px; color:#bfdbfe; text-align:right; }
 .topbar-tval { font-size:20px; font-weight:700; color:#fff; margin-bottom:4px; }
 
-/* Cards */
-.cards-row { display:flex; gap:16px; margin-bottom:24px; }
-.mcard {
-  flex:1; min-width:0; background:#fff;
-  border:2px solid #e2e8f0; border-radius:16px;
-  padding:22px 12px 20px; text-align:center;
-  height:120px; display:flex; flex-direction:column;
-  justify-content:center; align-items:center;
-  box-shadow:0 2px 8px rgba(0,0,0,.06);
-}
-.mcard-val   { font-size:38px; font-weight:800; line-height:1; }
-.mcard-label { font-size:13px; font-weight:600; color:#64748b;
-               text-transform:uppercase; letter-spacing:.06em; margin-top:8px; }
+/* ── Metric Grid ─────────────────────────────────────────── */
+.mg-row   { display:flex; gap:10px; margin-bottom:22px; align-items:stretch; flex-wrap:nowrap; }
+.mg-card  { background:#fff; border:2px solid #e2e8f0; border-radius:13px;
+            padding:14px 14px 12px; box-shadow:0 2px 6px rgba(0,0,0,.05);
+            display:flex; flex-direction:column; justify-content:center; }
+.mg-single{ flex:1.1; min-width:110px; text-align:center; }
+.mg-stack { flex:1.4; display:flex; flex-direction:column; gap:8px; min-width:150px; }
+.mg-stack .mg-card { flex:1; padding:10px 12px; }
+.mg-total { flex:2.8; min-width:220px; justify-content:flex-start; }
+
+.mg-title  { font-size:11px; font-weight:700; color:#64748b;
+             text-transform:uppercase; letter-spacing:.07em; margin-bottom:4px; }
+.mg-bignum { font-size:32px; font-weight:800; line-height:1.1; }
+.mg-path   { font-size:10px; color:#94a3b8; margin-top:5px;
+             word-break:break-all; line-height:1.4; }
+.mg-duo    { display:flex; gap:12px; justify-content:center; margin-top:5px; }
+.mg-duo-v  { text-align:center; }
+.mg-duo-n  { font-size:20px; font-weight:800; line-height:1; }
+.mg-duo-l  { font-size:10px; font-weight:700; text-transform:uppercase;
+             color:#64748b; margin-top:2px; letter-spacing:.05em; }
+
+/* Total Data card internals */
+.mg-th     { display:flex; justify-content:space-between; align-items:flex-start;
+             border-bottom:2px solid #e2e8f0; padding-bottom:9px; margin-bottom:10px; }
+.mg-th-ttl { font-size:17px; font-weight:800; color:#0f172a; }
+.mg-th-sub { font-size:10px; color:#94a3b8; max-width:160px;
+             word-break:break-all; text-align:right; line-height:1.4; }
+.mg-tgrid  { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.mg-tcell  { background:#f8fafc; border-radius:9px; padding:9px 11px; }
+.mg-tc-lbl { font-size:10px; font-weight:700; color:#64748b;
+             text-transform:uppercase; letter-spacing:.05em; }
+.mg-tc-val { font-size:22px; font-weight:800; line-height:1.2; margin-top:3px; }
+
+/* Colour helpers */
+.c-dark   { color:#0f172a; } .c-green  { color:#16a34a; } .c-red    { color:#dc2626; }
+.c-orange { color:#d97706; } .c-amber  { color:#f59e0b; } .c-gray   { color:#64748b; }
+.c-blue   { color:#2563eb; }
 
 /* Progress */
 .prog-wrap  { margin:4px 0 24px; }
@@ -186,9 +210,9 @@ def normalise_oid(raw: str) -> str:
     return s
 
 def badge(val):
-    if val == "YES":       return '<span class="badge b-yes">✓ YES</span>'
-    if val == "NO":        return '<span class="badge b-no">✕ NO</span>'
-    if val == "Undefined": return '<span class="badge b-und">Undefined</span>'
+    if val == "YES":          return '<span class="badge b-yes">✓ YES</span>'
+    if val == "NO":           return '<span class="badge b-no">✕ NO</span>'
+    if val == "Un-Verified":  return '<span class="badge b-und">Un-Verified</span>'
     return f'<span class="badge">{val}</span>'
 
 def star_html(val):
@@ -220,17 +244,17 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
         z = normalise_oid(r.get("Zoho_order_ID",""))
         f = normalise_oid(r.get("file_order_id","") or "")
         if not f:
-            return "Undefined"
+            return "Un-Verified"   # File Order ID not found — cannot determine match
         if not z:
-            return "Undefined"
+            return "Un-Verified"   # Zoho Order ID missing
         return "YES" if z == f else "NO"
 
     def star_flag(r):
         val = r.get("file_star", None)
         if val is None or str(val).strip() in ("", "None", "nan", "NaN"):
-            return "Undefined"
+            return "Un-Verified"   # Star rating not extracted from image
         try:    return "YES" if float(val) >= 4 else "NO"
-        except: return "Undefined"
+        except: return "Un-Verified"
 
     def verified_flag(r):
         oid  = r["Order_ID_Flag"]
@@ -239,7 +263,7 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
             return "YES"
         if oid == "NO" or star == "NO":
             return "NO"
-        return "Undefined"
+        return "Un-Verified"   # Either or both are Un-Verified, none is NO
 
     df["Order_ID_Flag"]  = df.apply(order_flag,     axis=1)
     df["file_star_flag"] = df.apply(star_flag,       axis=1)
@@ -358,23 +382,139 @@ st.markdown(f"""
 
 
 # =============================================================
-#  METRIC CARDS
+#  METRIC GRID  (new architecture)
 # =============================================================
 
-def mcard(val, label, color):
-    return (f'<div class="mcard">'
-            f'<div class="mcard-val" style="color:{color}">{val:,}</div>'
-            f'<div class="mcard-label">{label}</div></div>')
+# ── Derived counts from computed df ──────────────────────────
+if not df.empty:
+    _f  = df["Flag"].fillna("")
+    _oi = df["Order_ID_Flag"].fillna("")
+    _sf = df["file_star_flag"].fillna("")
+    oid_yes  = int((_oi == "YES").sum())
+    oid_no   = int((_oi == "NO").sum())
+    oid_unv  = int((_oi == "Un-Verified").sum())
+    star_yes = int((_sf == "YES").sum())
+    star_no  = int((_sf == "NO").sum())
+    star_unv = int((_sf == "Un-Verified").sum())
+    v_yes    = int((_f  == "YES").sum())
+    v_no     = int((_f  == "NO").sum())
+    v_unv    = int((_f  == "Un-Verified").sum())
+else:
+    oid_yes = oid_no = oid_unv = 0
+    star_yes = star_no = star_unv = 0
+    v_yes = v_no = v_unv = 0
 
-st.markdown(
-    '<div class="cards-row">'
-    + mcard(stats.get("total",    0), "Total Records",  "#0f172a")
-    + mcard(stats.get("pending",  0), "Processing",     "#d97706")
-    + mcard(stats.get("ok",       0), "Completed OK",   "#16a34a")
-    + mcard(stats.get("orders_found", 0), "File orders detected", "#2563eb")
-    + mcard(stats.get("stars_found",  0), "Star rating counted",  "#7c3aed")
-    + mcard(int((df.get("Flag", pd.Series(dtype=str)) == "YES").sum()) if not df.empty else 0, "Verified", "#dc2626")
-    + '</div>', unsafe_allow_html=True)
+# ── Folder count (filesystem or fallback to DB total) ─────────
+try:
+    from config import BASE_DIR as _BD
+    _bp = Path(str(_BD))
+    folder_count = sum(1 for e in _bp.iterdir() if e.is_dir()) if _bp.exists() else stats.get("total", 0)
+    folder_path  = str(_BD)
+except Exception:
+    folder_count = stats.get("total", 0)
+    folder_path  = "—"
+
+_pend = stats.get("pending", 0)
+
+st.markdown(f"""
+<div class="mg-row">
+
+  <!-- 1 · Data in pipeline -->
+  <div class="mg-card mg-single">
+    <div class="mg-title">Data in pipeline</div>
+    <div class="mg-bignum c-dark">{folder_count:,}</div>
+    <div class="mg-path">{folder_path}</div>
+  </div>
+
+  <!-- 2 · Processing -->
+  <div class="mg-card mg-single">
+    <div class="mg-title">Processing</div>
+    <div class="mg-bignum c-orange">{_pend:,}</div>
+    <div class="mg-path">python pipeline.py --limit 5<br>--fresh &nbsp;or&nbsp; pipeline.py</div>
+  </div>
+
+  <!-- 3 · Order ID Detected + Stars Detected -->
+  <div class="mg-stack">
+    <div class="mg-card">
+      <div class="mg-title">Order ID Detected</div>
+      <div class="mg-duo">
+        <div class="mg-duo-v">
+          <div class="mg-duo-n c-green">{oid_yes:,}</div>
+          <div class="mg-duo-l">YES</div>
+        </div>
+        <div class="mg-duo-v">
+          <div class="mg-duo-n c-red">{oid_no:,}</div>
+          <div class="mg-duo-l">NO</div>
+        </div>
+      </div>
+    </div>
+    <div class="mg-card">
+      <div class="mg-title">Stars Detected</div>
+      <div class="mg-duo">
+        <div class="mg-duo-v">
+          <div class="mg-duo-n c-green">{star_yes:,}</div>
+          <div class="mg-duo-l">YES</div>
+        </div>
+        <div class="mg-duo-v">
+          <div class="mg-duo-n c-red">{star_no:,}</div>
+          <div class="mg-duo-l">NO</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 · Order ID Match / Mismatch -->
+  <div class="mg-stack">
+    <div class="mg-card" style="border-color:#bbf7d0;">
+      <div class="mg-title">Order ID Match</div>
+      <div class="mg-bignum c-green">{oid_yes:,}</div>
+    </div>
+    <div class="mg-card" style="border-color:#fecaca;">
+      <div class="mg-title">Order ID Mismatch</div>
+      <div class="mg-bignum c-red">{oid_no:,}</div>
+    </div>
+  </div>
+
+  <!-- 5 · Stars ≥4 / Stars <4 -->
+  <div class="mg-stack">
+    <div class="mg-card" style="border-color:#fde68a;">
+      <div class="mg-title">Stars ≥ 4</div>
+      <div class="mg-bignum c-amber">{star_yes:,}</div>
+    </div>
+    <div class="mg-card">
+      <div class="mg-title">Stars &lt; 4</div>
+      <div class="mg-bignum c-gray">{star_no:,}</div>
+    </div>
+  </div>
+
+  <!-- 6 · Total Data -->
+  <div class="mg-card mg-total">
+    <div class="mg-th">
+      <span class="mg-th-ttl">Total Data</span>
+      <span class="mg-th-sub">{folder_path}</span>
+    </div>
+    <div class="mg-tgrid">
+      <div class="mg-tcell">
+        <div class="mg-tc-lbl">Processing</div>
+        <div class="mg-tc-val c-orange">{_pend:,}</div>
+      </div>
+      <div class="mg-tcell">
+        <div class="mg-tc-lbl">Verified — YES</div>
+        <div class="mg-tc-val c-green">{v_yes:,}</div>
+      </div>
+      <div class="mg-tcell">
+        <div class="mg-tc-lbl">Verified — NO</div>
+        <div class="mg-tc-val c-red">{v_no:,}</div>
+      </div>
+      <div class="mg-tcell">
+        <div class="mg-tc-lbl">Un-Verified</div>
+        <div class="mg-tc-val c-gray">{v_unv:,}</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+""", unsafe_allow_html=True)
 
 
 # =============================================================
@@ -426,17 +566,17 @@ PIPE_OPTIONS = [
 with fc1:
     st.markdown('<div class="filter-label">✦ Verified</div>',
                 unsafe_allow_html=True)
-    flag_filter = st.selectbox("", ["All","YES","NO","Undefined"],
+    flag_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
                                label_visibility="collapsed", key="ff1")
 with fc2:
     st.markdown('<div class="filter-label">🔗 Order ID Match</div>',
                 unsafe_allow_html=True)
-    order_filter = st.selectbox("", ["All","YES","NO","Undefined"],
+    order_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
                                 label_visibility="collapsed", key="ff2")
 with fc3:
     st.markdown('<div class="filter-label">⭐ Star Rating ≥ 4</div>',
                 unsafe_allow_html=True)
-    star_filter = st.selectbox("", ["All","YES","NO","Undefined"],
+    star_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
                                label_visibility="collapsed", key="ff3")
 with fc4:
     st.markdown('<div class="filter-label">⚙️ Processing Status</div>',

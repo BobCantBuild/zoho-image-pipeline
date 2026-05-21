@@ -201,6 +201,21 @@ def _footer(stats: dict, elapsed: float):
 
 
 # =============================================================
+#  REAL-TIME GITHUB SYNC  (background thread during run)
+# =============================================================
+
+def _periodic_github_sync(stop_event: threading.Event, interval: int = 30):
+    """Push DB → CSV → GitHub every `interval` seconds while pipeline runs.
+    Runs as a daemon thread so it never blocks process exit."""
+    while not stop_event.wait(interval):
+        try:
+            from sync_to_github import sync
+            sync()
+        except Exception as e:
+            logger.debug("periodic_sync: %s", e)
+
+
+# =============================================================
 #  MAIN
 # =============================================================
 
@@ -231,6 +246,17 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False):
                        "flag": "PENDING"})
 
     _header(len(pending), skipped)
+
+    # ── Start background sync thread (pushes every 30 s to GitHub) ──
+    _stop_sync = threading.Event()
+    _sync_thread = threading.Thread(
+        target=_periodic_github_sync,
+        args=(_stop_sync, 30),
+        daemon=True,
+        name="github-sync",
+    )
+    _sync_thread.start()
+    print(f"  {CY}Live sync:{R} GitHub dashboard updating every 30 s…\n")
 
     sno_c = [0]; err_c = [0]
     t0    = time.time()
@@ -263,6 +289,10 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False):
                      res.get("file_star"),
                      res.get("flag","?"))
                 _progress(sno, len(pending), rate, eta, err_c[0])
+
+    # ── Stop background sync; do one final sync ──────────────────
+    _stop_sync.set()
+    _sync_thread.join(timeout=5)
 
     print()
     _footer(get_stats(), time.time() - t0)
