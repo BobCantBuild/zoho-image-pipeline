@@ -296,10 +296,14 @@ def add_posting_date(df: pd.DataFrame) -> pd.DataFrame:
 #  DATA SOURCE  — SQLite locally, CSV on cloud
 # =============================================================
 
-@st.cache_data(ttl=10)
-def load_data() -> tuple:
-    """Returns (dataframe, source_label, stats_dict)."""
+@st.cache_data(ttl=8)
+def load_data(db_mtime: float, csv_mtime: float) -> tuple:
+    """Returns (dataframe, source_label, stats_dict).
 
+    Cache key includes both file mtimes — any write to the DB or CSV
+    immediately produces a different key, bypassing the stale cache entry.
+    ttl=8 is a safety net; mtime invalidation is the primary mechanism.
+    """
     # ── Try SQLite first (local machine) ──────────────────────
     if Path(DB_PATH).exists():
         try:
@@ -313,14 +317,13 @@ def load_data() -> tuple:
                 FROM zoho_records ORDER BY sno
             """, conn)
 
-            # Stats from DB
             q = lambda s: conn.execute(s).fetchone()[0]
             stats = {
-                "total":          q("SELECT COUNT(*) FROM zoho_records"),
-                "pending":        q("SELECT COUNT(*) FROM zoho_records WHERE flag='PENDING'"),
-                "ok":             q("SELECT COUNT(*) FROM zoho_records WHERE flag='OK'"),
-                "orders_found":   q("SELECT COUNT(*) FROM zoho_records WHERE file_order_id IS NOT NULL AND flag!='PENDING'"),
-                "stars_found":    q("SELECT COUNT(*) FROM zoho_records WHERE file_star IS NOT NULL AND flag!='PENDING'"),
+                "total":        q("SELECT COUNT(*) FROM zoho_records"),
+                "pending":      q("SELECT COUNT(*) FROM zoho_records WHERE flag='PENDING'"),
+                "ok":           q("SELECT COUNT(*) FROM zoho_records WHERE flag='OK'"),
+                "orders_found": q("SELECT COUNT(*) FROM zoho_records WHERE file_order_id IS NOT NULL AND flag!='PENDING'"),
+                "stars_found":  q("SELECT COUNT(*) FROM zoho_records WHERE file_star  IS NOT NULL AND flag!='PENDING'"),
             }
             conn.close()
 
@@ -328,37 +331,43 @@ def load_data() -> tuple:
                 df = compute_flags(df)
                 df = add_posting_date(df)
                 return df, "🖥️  Live — SQLite database", stats
-        except Exception as e:
+        except Exception:
             pass   # fall through to CSV
 
     # ── Fallback: CSV from repo (cloud / shared access) ───────
     if CSV_PATH.exists():
         df = pd.read_csv(CSV_PATH, encoding="utf-8-sig", dtype=str)
-
-        # Derive stats from CSV
         pf = df.get("pipeline_flag", pd.Series(dtype=str))
         stats = {
-            "total":    len(df),
-            "pending":  int((pf == "PENDING").sum()),
-            "ok":       int((pf == "OK").sum()),
+            "total":        len(df),
+            "pending":      int((pf == "PENDING").sum()),
+            "ok":           int((pf == "OK").sum()),
             "orders_found": int(df["file_order_id"].notna().sum() if "file_order_id" in df else 0),
             "stars_found":  int(df["file_star"].notna().sum()     if "file_star"     in df else 0),
         }
-
         if not df.empty:
             df = compute_flags(df)
             df = add_posting_date(df)
-            mtime = time.strftime("%d %b %Y  %H:%M", time.localtime(CSV_PATH.stat().st_mtime))
-            return df, f"☁️  Cloud — GitHub CSV (zoho_latest.csv • updated {mtime})", stats
+            mtime_str = time.strftime("%d %b %Y  %H:%M", time.localtime(CSV_PATH.stat().st_mtime))
+            return df, f"☁️  Cloud — GitHub CSV (updated {mtime_str})", stats
 
     return pd.DataFrame(), "⚠️  No data source found", {}
 
 
 # =============================================================
-#  LOAD
+#  LOAD  — pass current file mtimes as cache-key arguments
 # =============================================================
 
-df, source_label, stats = load_data()
+def _file_mtime(p: Path) -> float:
+    """Return file modification time in seconds, or 0 if file absent."""
+    try:
+        return p.stat().st_mtime if p.exists() else 0.0
+    except Exception:
+        return 0.0
+
+_db_mtime  = _file_mtime(DB_PATH)
+_csv_mtime = _file_mtime(CSV_PATH)
+df, source_label, stats = load_data(db_mtime=_db_mtime, csv_mtime=_csv_mtime)
 
 total   = max(stats.get("total",   1), 1)
 pending = stats.get("pending", 0)
@@ -727,10 +736,17 @@ st.markdown(
 
 
 # =============================================================
-#  AUTO REFRESH  — only while pipeline running
+#  AUTO REFRESH — every 8 s, unconditionally
+#
+#  No explicit cache.clear() needed: load_data() uses the current
+#  file mtime as a cache-key argument. On each rerun Streamlit
+#  re-evaluates _file_mtime(DB_PATH / CSV_PATH).
+#    • mtime unchanged  →  cache HIT  (instant, no DB read)
+#    • mtime changed    →  cache MISS →  fresh DB/CSV read
+#
+#  This means any pipeline write (including --fresh) is reflected
+#  within 8 s automatically, with zero manual refresh needed.
 # =============================================================
 
-if pending > 0:
-    time.sleep(10)
-    st.cache_data.clear()
-    st.rerun()
+time.sleep(8)
+st.rerun()
