@@ -536,24 +536,26 @@ st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file or
               label_visibility="collapsed", key="search_box")
 search = st.session_state.get("search_box", "")
 
-PIPE_OPTIONS = [
-    "All — Show everything",
-    "OK — Fully processed",
-    "PENDING — Still running",
-    "ERROR — Failed records",
-    "NO_ORDER_ID — Order ID not found in image",
-    "NO_STAR — Star rating not found in image",
-    "LOW_CONF_ORDER — Low confidence match (verify manually)",
-]
-
-# ── Branch options ──────────────────────────────────────────────
+# ── Branch options ─────────────────────────────────────────────
 if "branch" in df.columns:
     branches = sorted({(b or "").strip() for b in df["branch"].fillna("").tolist()} - {""})
 else:
     branches = []
 
+# ── Pagination callbacks (must be defined before buttons render) ─
+def _prev_page():
+    p = int(st.session_state.get("page", 1))
+    if p > 1:
+        st.session_state["page"] = p - 1
+
+def _next_page():
+    p   = int(st.session_state.get("page", 1))
+    top = int(st.session_state.get("_total_pages", 1))
+    if p < top:
+        st.session_state["page"] = p + 1
+
 # =============================================================
-#  FILTER CONTAINER  — all controls in one bordered box
+#  FILTER CONTAINER  — single-row, bordered box
 # =============================================================
 
 if df.empty:
@@ -561,76 +563,42 @@ if df.empty:
     st.stop()
 
 with st.container(border=True):
+    fc1, fc2, fc3, fc4, fc5, fc6, fc7 = st.columns(
+        [1, 1, 1, 1, 1.7, 1.1, 0.8], vertical_alignment="bottom"
+    )
 
-    # ── Row 1 : dropdown filters + Clear All ──────────────────
-    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([1, 1, 1, 1.6, 0.9],
-                                                vertical_alignment="bottom")
-    with r1c1:
+    with fc1:
         st.markdown('<div class="filter-label">✦ Verified</div>', unsafe_allow_html=True)
         flag_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
                                    label_visibility="collapsed", key="ff1")
-    with r1c2:
+    with fc2:
         st.markdown('<div class="filter-label">🔗 Order ID Match</div>', unsafe_allow_html=True)
         order_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
                                     label_visibility="collapsed", key="ff2")
-    with r1c3:
+    with fc3:
         st.markdown('<div class="filter-label">⭐ Star Rating ≥ 4</div>', unsafe_allow_html=True)
         star_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
                                    label_visibility="collapsed", key="ff3")
-    with r1c4:
-        st.markdown('<div class="filter-label">⚙️ Processing Status</div>', unsafe_allow_html=True)
-        pipe_sel = st.selectbox("", PIPE_OPTIONS,
-                                label_visibility="collapsed", key="ff4")
-        pipe_key = pipe_sel.split(" — ")[0].strip()
-    with r1c5:
+    with fc4:
+        st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
+        branch_filter = st.selectbox("", ["All", *branches],
+                                     label_visibility="collapsed", key="branch_filter")
+    with fc5:
+        st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
+        date_range = st.date_input(
+            "", value=[], format="DD/MM/YYYY",
+            label_visibility="collapsed", key="date_range",
+        )
+    with fc6:
         st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
-        if st.button("✕ Clear All", use_container_width=True):
-            for k in ["search_box","ff1","ff2","ff3","ff4",
-                      "branch_filter","date_from","date_to","page"]:
+        export_slot = st.empty()   # filled after filt is computed
+    with fc7:
+        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
+        if st.button("✕ Clear", use_container_width=True):
+            for k in ["search_box","ff1","ff2","ff3",
+                      "branch_filter","date_range","page"]:
                 if k in st.session_state: del st.session_state[k]
             st.cache_data.clear(); st.rerun()
-
-    st.markdown('<hr style="margin:8px 0 10px;border:none;border-top:1px solid #e2e8f0">',
-                unsafe_allow_html=True)
-
-    # ── Row 2 : branch · date · prev · next · export ──────────
-    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([1.2, 2.4, 0.8, 0.8, 1.6],
-                                                vertical_alignment="bottom")
-    with r2c1:
-        st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
-        branch_filter = st.selectbox(
-            "",
-            ["All", *branches],
-            label_visibility="collapsed",
-            key="branch_filter",
-        )
-
-    with r2c2:
-        st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
-        _dc1, _dc2 = st.columns(2)
-        with _dc1:
-            date_from = st.date_input(
-                "From", value=st.session_state.get("date_from", None),
-                format="DD/MM/YYYY", key="date_from",
-            )
-        with _dc2:
-            date_to = st.date_input(
-                "To", value=st.session_state.get("date_to", None),
-                format="DD/MM/YYYY", key="date_to",
-            )
-
-    with r2c3:
-        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
-        prev_btn = st.button("‹ Prev", use_container_width=True, type="secondary")
-
-    with r2c4:
-        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
-        next_btn = st.button("Next ›", use_container_width=True, type="secondary")
-
-    with r2c5:
-        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
-        # Export defined after filt is computed — placeholder rendered here
-        export_slot = st.empty()
 
 
 # =============================================================
@@ -643,19 +611,16 @@ filt = df.copy()
 if flag_filter  != "All": filt = filt[filt["Flag"]           == flag_filter]
 if order_filter != "All": filt = filt[filt["Order_ID_Flag"]  == order_filter]
 if star_filter  != "All": filt = filt[filt["file_star_flag"] == star_filter]
-if pipe_key     != "All":
-    filt = filt[filt["pipeline_flag"].fillna("").str.contains(pipe_key)]
 if "branch" in filt.columns and branch_filter != "All":
     filt = filt[filt["branch"].fillna("") == branch_filter]
-if "date_of_posting" in filt.columns and date_from and date_to:
-    _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
-    filt = filt[(_dp >= date_from) & (_dp <= date_to)]
-elif "date_of_posting" in filt.columns and date_from:
-    _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
-    filt = filt[_dp >= date_from]
-elif "date_of_posting" in filt.columns and date_to:
-    _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
-    filt = filt[_dp <= date_to]
+if "date_of_posting" in filt.columns:
+    _dr = date_range if isinstance(date_range, (list, tuple)) else []
+    if len(_dr) == 2:
+        _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
+        filt = filt[(_dp >= _dr[0]) & (_dp <= _dr[1])]
+    elif len(_dr) == 1:
+        _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
+        filt = filt[_dp >= _dr[0]]
 if search:
     s = search.lower()
     filt = filt[
@@ -667,8 +632,9 @@ if search:
 
 filt = filt.reset_index(drop=True)
 total_pages = max(1, (len(filt) - 1) // PAGE_SIZE + 1)
+st.session_state["_total_pages"] = total_pages   # used by _next_page callback
 
-# ── Fill export button (now filt is ready) ────────────────────
+# ── Fill export button now that filt is ready ─────────────────
 exp_cols = ["sno","date_of_posting_str","branch","ticket_id","Zoho_order_ID",
             "file_order_id","Order_ID_Flag","file_star","file_star_flag","file_name","Flag"]
 exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
@@ -684,13 +650,8 @@ with export_slot:
 st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>',
             unsafe_allow_html=True)
 
-# Page state (kept in session_state, so Prev/Next works without a number input)
-page = int(st.session_state.get("page", 1))
-if prev_btn and page > 1:
-    page -= 1
-if next_btn and page < total_pages:
-    page += 1
-page = max(1, min(total_pages, int(page)))
+# Page state driven by session_state (callbacks update it before table renders)
+page = max(1, min(total_pages, int(st.session_state.get("page", 1))))
 st.session_state["page"] = page
 
 
@@ -737,11 +698,22 @@ st.markdown(f"""
     </tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
-</div>
-<div style="margin-top:10px;font-size:14px;color:#94a3b8;text-align:right">
-  Page {page} of {total_pages} &nbsp;·&nbsp;
-  Rows {start+1}–{min(start+PAGE_SIZE,len(filt))} of {len(filt):,}
 </div>""", unsafe_allow_html=True)
+
+# ── Pagination bar — sits directly below the table ────────────
+_pa, _pb, _pc = st.columns([1, 4, 1])
+with _pa:
+    st.button("‹ Prev", on_click=_prev_page, use_container_width=True, type="secondary")
+with _pb:
+    st.markdown(
+        f'<div style="text-align:center;font-size:13px;color:#94a3b8;padding-top:8px">'
+        f'Page <b style="color:#334155">{page}</b> of <b style="color:#334155">{total_pages}</b>'
+        f' &nbsp;·&nbsp; '
+        f'Rows {start+1}–{min(start+PAGE_SIZE,len(filt))} of {len(filt):,}'
+        f'</div>', unsafe_allow_html=True,
+    )
+with _pc:
+    st.button("Next ›", on_click=_next_page, use_container_width=True, type="secondary")
 
 
 # =============================================================
