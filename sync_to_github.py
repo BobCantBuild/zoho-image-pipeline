@@ -27,6 +27,8 @@ DB_PATH = os.environ.get("ZOHOPIPE_DB_PATH") or str(CONFIG_DB_PATH)
 REPO_PATH = os.environ.get("ZOHOPIPE_REPO_PATH") or str(Path(__file__).resolve().parent)
 CSV_EXPORT_DIR = "data"  # subfolder inside repo
 CSV_FILENAME = "zoho_latest.csv"
+# Remote that Streamlit Cloud deploys from — must match the repo in streamlit.io settings
+GIT_REMOTE = os.environ.get("ZOHOPIPE_GIT_REMOTE", "origin")
 # ─────────────────────────────────────────────────────────────
 
 
@@ -105,8 +107,8 @@ def git_push(repo: Path, csv_rel: str, row_count: int):
         return
 
     _run_git(repo, ["commit", "-m", msg])
-    _run_git(repo, ["push"])
-    logger.info("sync_to_github: pushed %d rows to GitHub", row_count)
+    _run_git(repo, ["push", GIT_REMOTE, branch])
+    logger.info("sync_to_github: pushed %d rows to GitHub (%s)", row_count, GIT_REMOTE)
     print(f"  [GitHub] Synced {row_count:,} records → public dashboard updated ✓")
 
 
