@@ -110,6 +110,9 @@ div[data-baseweb="select"] > div { min-height:36px !important; font-size:13px !i
 div[data-baseweb="select"] span  { font-size:13px !important; }
 div[data-baseweb="input"] > div  { min-height:36px !important; font-size:13px !important; }
 div[data-testid="stDateInput"] div[data-baseweb="input"] { min-height:36px !important; }
+/* From / To date labels — keep them small and tight */
+div[data-testid="stDateInput"] label { font-size:11px !important; color:#64748b !important;
+  font-weight:600 !important; margin-bottom:2px !important; }
 div[data-testid="stDownloadButton"] button,
 div[data-testid="stButton"] button {
   height:36px !important;
@@ -150,24 +153,29 @@ button[kind="secondary"] span { font-size:14px !important; line-height:1 !import
 .b-no  { background:#fee2e2; color:#b91c1c; }
 .b-und { background:#f1f5f9; color:#64748b; }
 
-/* Search input — tight, no extra whitespace */
-div[data-testid="stTextInput"] { width:100% !important; margin-bottom:0 !important; }
+/* Search input — target both the BaseUI wrapper AND the raw input */
+div[data-testid="stTextInput"] { width:100% !important; margin-bottom:0 !important; padding-bottom:0 !important; }
 div[data-testid="stTextInput"] > div { width:100% !important; margin-bottom:0 !important; }
-div[data-testid="stTextInput"] input {
-  font-size:14px !important; border-radius:10px !important;
-  border:2px solid #94a3b8 !important; padding:10px 16px !important;
-  width:100% !important; min-height:42px !important;
-  box-sizing:border-box !important;
+/* BaseUI wrapper — this is what actually paints the visible border */
+div[data-testid="stTextInput"] div[data-baseweb="input"] {
+  border:2px solid #94a3b8 !important;
+  border-top:2px solid #94a3b8 !important;
+  border-bottom:2px solid #94a3b8 !important;
+  border-radius:10px !important;
   box-shadow:0 1px 3px rgba(0,0,0,.06) !important;
+  min-height:42px !important;
 }
-div[data-testid="stTextInput"] input:focus {
+div[data-testid="stTextInput"] div[data-baseweb="input"]:focus-within {
   border-color:#6366f1 !important;
   box-shadow:0 0 0 3px rgba(99,102,241,.12) !important;
+}
+div[data-testid="stTextInput"] input {
+  font-size:14px !important; background:transparent !important;
+  border:none !important; padding:10px 16px !important;
+  width:100% !important; box-sizing:border-box !important;
   outline:none !important;
 }
 div[data-testid="stTextInput"] input::placeholder { font-size:14px !important; color:#94a3b8 !important; }
-/* Kill Streamlit's injected bottom gap on the text-input widget block */
-div[data-testid="stTextInput"] { padding-bottom:0 !important; }
 div[data-testid="stTextInput"] + div[data-testid="stVerticalBlock"] { margin-top:0 !important; }
 div[data-testid="stSelectbox"] > div > div {
   font-size:15px !important; border-radius:10px !important;
@@ -225,23 +233,36 @@ def flag_cell(val):
     else:                  bg = "#f1f5f9"
     return f'<td class="ctr" style="background:{bg}">{badge(val)}</td>'
 
+def _is_blank(val) -> bool:
+    """True for None, NaN (float), or empty/placeholder strings.
+    Handles the pandas NaN-as-float case where bool(nan) is True."""
+    if val is None:
+        return True
+    if isinstance(val, float):
+        return pd.isna(val)          # catches float('nan')
+    return str(val).strip() in ("", "None", "nan", "NaN", "—")
+
+
 def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
     """Add Order_ID_Flag, file_star_flag, Flag columns."""
     df["Zoho_order_ID"] = df.get("Zoho_order_ID",
                           df.get("csv_order_id", pd.Series([""] * len(df)))).fillna("")
 
     def order_flag(r):
-        z = normalise_oid(r.get("Zoho_order_ID",""))
-        f = normalise_oid(r.get("file_order_id","") or "")
+        raw_f = r.get("file_order_id", None)
+        if _is_blank(raw_f):
+            return "Un-Verified"   # File Order ID not extracted — cannot determine match
+        f = normalise_oid(str(raw_f))
         if not f:
-            return "Un-Verified"   # File Order ID not found — cannot determine match
+            return "Un-Verified"
+        z = normalise_oid(r.get("Zoho_order_ID", ""))
         if not z:
             return "Un-Verified"   # Zoho Order ID missing
         return "YES" if z == f else "NO"
 
     def star_flag(r):
         val = r.get("file_star", None)
-        if val is None or str(val).strip() in ("", "None", "nan", "NaN"):
+        if _is_blank(val):
             return "Un-Verified"   # Star rating not extracted from image
         try:    return "YES" if float(val) >= 4 else "NO"
         except: return "Un-Verified"
@@ -565,7 +586,7 @@ with st.container(border=True):
         st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
         if st.button("✕ Clear All", use_container_width=True):
             for k in ["search_box","ff1","ff2","ff3","ff4",
-                      "branch_filter","date_range","page"]:
+                      "branch_filter","date_from","date_to","page"]:
                 if k in st.session_state: del st.session_state[k]
             st.cache_data.clear(); st.rerun()
 
@@ -586,13 +607,17 @@ with st.container(border=True):
 
     with r2c2:
         st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
-        date_range = st.date_input(
-            "",
-            value=st.session_state.get("date_range", None),
-            format="DD/MM/YYYY",
-            label_visibility="collapsed",
-            key="date_range",
-        )
+        _dc1, _dc2 = st.columns(2)
+        with _dc1:
+            date_from = st.date_input(
+                "From", value=st.session_state.get("date_from", None),
+                format="DD/MM/YYYY", key="date_from",
+            )
+        with _dc2:
+            date_to = st.date_input(
+                "To", value=st.session_state.get("date_to", None),
+                format="DD/MM/YYYY", key="date_to",
+            )
 
     with r2c3:
         st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
@@ -622,13 +647,15 @@ if pipe_key     != "All":
     filt = filt[filt["pipeline_flag"].fillna("").str.contains(pipe_key)]
 if "branch" in filt.columns and branch_filter != "All":
     filt = filt[filt["branch"].fillna("") == branch_filter]
-if "date_of_posting" in filt.columns and isinstance(date_range, (tuple, list)) and len(date_range) == 2:
-    _d0, _d1 = date_range
-    if _d0 and _d1:
-        filt = filt[
-            (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date >= _d0)
-            & (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date <= _d1)
-        ]
+if "date_of_posting" in filt.columns and date_from and date_to:
+    _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
+    filt = filt[(_dp >= date_from) & (_dp <= date_to)]
+elif "date_of_posting" in filt.columns and date_from:
+    _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
+    filt = filt[_dp >= date_from]
+elif "date_of_posting" in filt.columns and date_to:
+    _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
+    filt = filt[_dp <= date_to]
 if search:
     s = search.lower()
     filt = filt[
