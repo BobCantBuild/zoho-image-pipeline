@@ -515,10 +515,6 @@ st.text_input("", placeholder="🔍  Search by file name, Zoho order ID, file or
               label_visibility="collapsed", key="search_box")
 search = st.session_state.get("search_box", "")
 
-st.markdown('<div style="margin-bottom:10px;"></div>', unsafe_allow_html=True)
-
-fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
-
 PIPE_OPTIONS = [
     "All — Show everything",
     "OK — Fully processed",
@@ -529,101 +525,95 @@ PIPE_OPTIONS = [
     "LOW_CONF_ORDER — Low confidence match (verify manually)",
 ]
 
-with fc1:
-    st.markdown('<div class="filter-label">✦ Verified</div>',
-                unsafe_allow_html=True)
-    flag_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
-                               label_visibility="collapsed", key="ff1")
-with fc2:
-    st.markdown('<div class="filter-label">🔗 Order ID Match</div>',
-                unsafe_allow_html=True)
-    order_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
-                                label_visibility="collapsed", key="ff2")
-with fc3:
-    st.markdown('<div class="filter-label">⭐ Star Rating ≥ 4</div>',
-                unsafe_allow_html=True)
-    star_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
-                               label_visibility="collapsed", key="ff3")
-with fc4:
-    st.markdown('<div class="filter-label">⚙️ Processing Status</div>',
-                unsafe_allow_html=True)
-    pipe_sel    = st.selectbox("", PIPE_OPTIONS,
-                               label_visibility="collapsed", key="ff4")
-    pipe_key    = pipe_sel.split(" — ")[0].strip()
-with fc5:
-    st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
-    if st.button("✕  Clear All Filters", use_container_width=True):
-        for k in ["search_box","ff1","ff2","ff3","ff4","branch_filter","date_range","page"]:
-            if k in st.session_state: del st.session_state[k]
-        st.cache_data.clear(); st.rerun()
-
+# ── Branch options ──────────────────────────────────────────────
+if "branch" in df.columns:
+    branches = sorted({(b or "").strip() for b in df["branch"].fillna("").tolist()} - {""})
+else:
+    branches = []
 
 # =============================================================
-#  APPLY FILTERS
+#  FILTER CONTAINER  — all controls in one bordered box
 # =============================================================
 
 if df.empty:
     st.warning("⚠️  No data available. Run `pipeline.py` to process records.")
     st.stop()
 
+with st.container(border=True):
 
-# =============================================================
-#  PAGINATION + EXPORT
-# =============================================================
+    # ── Row 1 : dropdown filters + Clear All ──────────────────
+    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns([1, 1, 1, 1.6, 0.9],
+                                                vertical_alignment="bottom")
+    with r1c1:
+        st.markdown('<div class="filter-label">✦ Verified</div>', unsafe_allow_html=True)
+        flag_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
+                                   label_visibility="collapsed", key="ff1")
+    with r1c2:
+        st.markdown('<div class="filter-label">🔗 Order ID Match</div>', unsafe_allow_html=True)
+        order_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
+                                    label_visibility="collapsed", key="ff2")
+    with r1c3:
+        st.markdown('<div class="filter-label">⭐ Star Rating ≥ 4</div>', unsafe_allow_html=True)
+        star_filter = st.selectbox("", ["All","YES","NO","Un-Verified"],
+                                   label_visibility="collapsed", key="ff3")
+    with r1c4:
+        st.markdown('<div class="filter-label">⚙️ Processing Status</div>', unsafe_allow_html=True)
+        pipe_sel = st.selectbox("", PIPE_OPTIONS,
+                                label_visibility="collapsed", key="ff4")
+        pipe_key = pipe_sel.split(" — ")[0].strip()
+    with r1c5:
+        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
+        if st.button("✕ Clear All", use_container_width=True):
+            for k in ["search_box","ff1","ff2","ff3","ff4",
+                      "branch_filter","date_range","page"]:
+                if k in st.session_state: del st.session_state[k]
+            st.cache_data.clear(); st.rerun()
 
-PAGE_SIZE = 50
+    st.markdown('<hr style="margin:8px 0 10px;border:none;border-top:1px solid #e2e8f0">',
+                unsafe_allow_html=True)
 
-# ---- Branch + Date filters (with clear X) ----
-if "branch" in df.columns:
-    branches = sorted({(b or "").strip() for b in df["branch"].fillna("").tolist()} - {""})
-else:
-    branches = []
-
-dates = pd.to_datetime(df.get("date_of_posting", pd.Series([], dtype="datetime64[ns]")), errors="coerce").dropna()
-default_date_range = None
-if len(dates) > 0:
-    default_date_range = (dates.min().date(), dates.max().date())
-
-branch_col, date_col, prev_col, next_col, export_col = st.columns(
-    [1.8, 3.2, 1, 1, 2.2],
-    vertical_alignment="bottom",
-)
-
-with branch_col:
-    st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
-    b1, b2 = st.columns([5, 1], vertical_alignment="bottom")
-    with b1:
+    # ── Row 2 : branch · date · prev · next · export ──────────
+    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns([1.2, 2.4, 0.8, 0.8, 1.6],
+                                                vertical_alignment="bottom")
+    with r2c1:
+        st.markdown('<div class="filter-label">🏢 Branch</div>', unsafe_allow_html=True)
         branch_filter = st.selectbox(
             "",
             ["All", *branches],
             label_visibility="collapsed",
             key="branch_filter",
         )
-    with b2:
-        if st.button("✕", key="branch_clear", use_container_width=True, type="secondary"):
-            if "branch_filter" in st.session_state:
-                del st.session_state["branch_filter"]
-            st.cache_data.clear()
-            st.rerun()
 
-with date_col:
-    st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
-    d1, d2 = st.columns([8, 1], vertical_alignment="bottom")
-    with d1:
+    with r2c2:
+        st.markdown('<div class="filter-label">📅 Date of Posting</div>', unsafe_allow_html=True)
         date_range = st.date_input(
             "",
-            value=st.session_state.get("date_range", default_date_range),
+            value=st.session_state.get("date_range", None),
+            format="DD/MM/YYYY",
             label_visibility="collapsed",
             key="date_range",
         )
-    with d2:
-        if st.button("✕", key="date_clear", use_container_width=True, type="secondary"):
-            if "date_range" in st.session_state:
-                del st.session_state["date_range"]
-            st.cache_data.clear()
-            st.rerun()
 
-# ---- APPLY FILTERS ----
+    with r2c3:
+        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
+        prev_btn = st.button("‹ Prev", use_container_width=True, type="secondary")
+
+    with r2c4:
+        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
+        next_btn = st.button("Next ›", use_container_width=True, type="secondary")
+
+    with r2c5:
+        st.markdown('<div class="filter-label">&nbsp;</div>', unsafe_allow_html=True)
+        # Export defined after filt is computed — placeholder rendered here
+        export_slot = st.empty()
+
+
+# =============================================================
+#  APPLY FILTERS
+# =============================================================
+
+PAGE_SIZE = 50
+
 filt = df.copy()
 if flag_filter  != "All": filt = filt[filt["Flag"]           == flag_filter]
 if order_filter != "All": filt = filt[filt["Order_ID_Flag"]  == order_filter]
@@ -633,11 +623,11 @@ if pipe_key     != "All":
 if "branch" in filt.columns and branch_filter != "All":
     filt = filt[filt["branch"].fillna("") == branch_filter]
 if "date_of_posting" in filt.columns and isinstance(date_range, (tuple, list)) and len(date_range) == 2:
-    d0, d1 = date_range
-    if d0 and d1:
+    _d0, _d1 = date_range
+    if _d0 and _d1:
         filt = filt[
-            (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date >= d0)
-            & (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date <= d1)
+            (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date >= _d0)
+            & (pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date <= _d1)
         ]
 if search:
     s = search.lower()
@@ -651,46 +641,21 @@ if search:
 filt = filt.reset_index(drop=True)
 total_pages = max(1, (len(filt) - 1) // PAGE_SIZE + 1)
 
-with prev_col:
-    prev_btn = st.button("‹ Prev", use_container_width=True, type="secondary")
-
-with next_col:
-    next_btn = st.button("Next ›", use_container_width=True, type="secondary")
-
-with export_col:
-    exp_cols = [
-        "sno",
-        "date_of_posting_str",
-        "branch",
-        "ticket_id",
-        "Zoho_order_ID",
-        "file_order_id",
-        "Order_ID_Flag",
-        "file_star",
-        "file_star_flag",
-        "file_name",
-        "Flag",
-    ]
-    exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
-    exp_df.columns = [
-        "#",
-        "Date of Posting",
-        "Branch",
-        "Ticket ID",
-        "Zoho Order ID",
-        "File Order ID",
-        "Order ID Match",
-        "Star Rating",
-        "Star ≥ 4",
-        "File Name",
-        "Verified",
-    ][: len(exp_df.columns)]
+# ── Fill export button (now filt is ready) ────────────────────
+exp_cols = ["sno","date_of_posting_str","branch","ticket_id","Zoho_order_ID",
+            "file_order_id","Order_ID_Flag","file_star","file_star_flag","file_name","Flag"]
+exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
+exp_df.columns = ["#","Date of Posting","Branch","Ticket ID","Zoho Order ID",
+                  "File Order ID","Order ID Match","Star Rating","Star ≥ 4",
+                  "File Name","Verified"][: len(exp_df.columns)]
+with export_slot:
     st.download_button("⬇️ Export to CSV",
                        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
                        file_name="zoho_export.csv", mime="text/csv",
                        use_container_width=True)
 
-st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="pag-info"><b>{len(filt):,}</b> records found</div>',
+            unsafe_allow_html=True)
 
 # Page state (kept in session_state, so Prev/Next works without a number input)
 page = int(st.session_state.get("page", 1))
