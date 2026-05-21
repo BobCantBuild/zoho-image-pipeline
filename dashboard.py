@@ -296,13 +296,13 @@ def add_posting_date(df: pd.DataFrame) -> pd.DataFrame:
 #  DATA SOURCE  — SQLite locally, CSV on cloud
 # =============================================================
 
-@st.cache_data(ttl=8)
+@st.cache_data(ttl=120)
 def load_data(db_mtime: float, csv_mtime: float) -> tuple:
     """Returns (dataframe, source_label, stats_dict).
 
-    Cache key includes both file mtimes — any write to the DB or CSV
-    immediately produces a different key, bypassing the stale cache entry.
-    ttl=8 is a safety net; mtime invalidation is the primary mechanism.
+    Cache key = (db_mtime, csv_mtime).
+    Any write to the DB or CSV → different key → instant cache miss → fresh read.
+    ttl=120 s is a safety-net backstop only; mtime is the primary mechanism.
     """
     # ── Try SQLite first (local machine) ──────────────────────
     if Path(DB_PATH).exists():
@@ -746,21 +746,44 @@ st.markdown(
 # =============================================================
 #  AUTO REFRESH
 #
-#  Strategy:
-#    1. While pipeline is running (pending > 0): poll every 5 s.
-#    2. Right after a DB change (e.g. --fresh, new run, merge):
-#       detect via mtime stored in session_state → one refresh cycle.
-#    3. When idle + no changes: NO sleep, UI stays fully responsive.
+#  LOCAL  (SQLite DB exists on this machine)
+#  ─────────────────────────────────────────────────────────────
+#  • Pipeline running  (pending > 0)  → rerun every 5 s
+#  • DB mtime changed  (--fresh / new run / merge just finished)
+#                                     → one immediate rerun cycle
+#  • Idle, nothing changed            → NO sleep (UI stays responsive)
 #
-#  The mtime cache-key on load_data() means no explicit
-#  cache.clear() is needed — a changed mtime = automatic cache miss.
+#  CLOUD  (no local DB — reads from data/zoho_latest.csv)
+#  ─────────────────────────────────────────────────────────────
+#  • Pipeline running  (pending > 0)  → rerun every 5 s
+#  • Idle                             → rerun every 30 s
+#    Streamlit Cloud pulls the new CSV after each git push; on the
+#    next 30 s tick _file_mtime(CSV_PATH) returns the new mtime →
+#    load_data() gets a different cache key → cache miss → fresh CSV.
+#
+#  In both modes the mtime cache-key means re-reads are zero-cost
+#  when the file has not changed (cache HIT).
 # =============================================================
 
-_prev_db_mtime = st.session_state.get("_last_db_mtime", 0.0)
-st.session_state["_last_db_mtime"] = _db_mtime
+_is_cloud = not Path(DB_PATH).exists()
 
-_db_just_changed = (_db_mtime != _prev_db_mtime)
+_prev_db_mtime = st.session_state.get("_last_db_mtime",  0.0)
+_prev_cs_mtime = st.session_state.get("_last_csv_mtime", 0.0)
+st.session_state["_last_db_mtime"]  = _db_mtime
+st.session_state["_last_csv_mtime"] = _csv_mtime
 
-if pending > 0 or _db_just_changed:
+_db_just_changed  = (_db_mtime  != _prev_db_mtime)  and not _is_cloud
+_csv_just_changed = (_csv_mtime != _prev_cs_mtime)
+
+if pending > 0:
     time.sleep(5)
     st.rerun()
+elif _db_just_changed or _csv_just_changed:
+    # Something changed right now — rerun immediately without long sleep
+    time.sleep(1)
+    st.rerun()
+elif _is_cloud:
+    # Cloud: heartbeat so we catch the next GitHub CSV push
+    time.sleep(30)
+    st.rerun()
+# else: local + idle + nothing changed → no rerun, UI fully responsive
