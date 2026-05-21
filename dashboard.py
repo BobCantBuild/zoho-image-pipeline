@@ -375,6 +375,28 @@ done    = total - pending
 pct     = done / total * 100
 now_str = time.strftime("%d %b %Y  %H:%M")
 
+# ── Topbar context values ─────────────────────────────────────
+_ok_count = stats.get("ok", 0)
+
+# Data sync time: use CSV file mtime on cloud, current time on live SQLite
+if CSV_PATH.exists() and not Path(DB_PATH).exists():
+    _data_sync_str = time.strftime("%d %b %Y  %H:%M",
+                                   time.localtime(CSV_PATH.stat().st_mtime))
+    _data_src_chip = "☁️ GitHub CSV"
+elif Path(DB_PATH).exists():
+    _data_sync_str = now_str
+    _data_src_chip = "🖥️ Live SQLite"
+else:
+    _data_sync_str = "—"
+    _data_src_chip = "No data source"
+
+if pending > 0:
+    _badge = (f"⚡ Processing &nbsp;·&nbsp; {done} of {total} done"
+              f" &nbsp;·&nbsp; {pending} pending")
+else:
+    _badge = (f"✅ {done} of {total} verified"
+              f" &nbsp;·&nbsp; {_ok_count} OK &nbsp;·&nbsp; {done - _ok_count} flagged")
+
 
 # =============================================================
 #  TOP BAR
@@ -383,20 +405,18 @@ now_str = time.strftime("%d %b %Y  %H:%M")
 st.markdown(f"""
 <div class="topbar">
   <div style="display:flex;align-items:center;gap:16px">
-    <span style="font-size:42px">📦</span>
+    <span style="font-size:42px">🔍</span>
     <div>
-      <div class="topbar-title">Zoho Review Pipeline</div>
-      <div class="topbar-sub">Image Processing &amp; Order Verification Dashboard</div>
-      <div class="topbar-badge">
-        {"⚡ Pipeline running — auto-refreshing every 10 s"
-         if pending > 0 else "✅ Pipeline complete — all records processed"}
-      </div>
+      <div class="topbar-title">Zoho Order Verification</div>
+      <div class="topbar-sub">OCR · Image Processing · Order ID &amp; Star Rating Audit</div>
+      <div class="topbar-badge">{_badge}</div>
     </div>
   </div>
   <div class="topbar-time">
-    <div class="topbar-tval">{now_str}</div>
-    <div>Last refreshed</div>
-    <div style="margin-top:10px;font-size:13px;color:#93c5fd">{source_label}</div>
+    <div class="topbar-tval">{_data_sync_str}</div>
+    <div>Data last synced</div>
+    <div style="margin-top:8px;font-size:13px;color:#93c5fd">{_data_src_chip}</div>
+    <div style="margin-top:6px;font-size:12px;color:#7fa8d4">Page loaded {now_str}</div>
   </div>
 </div>""", unsafe_allow_html=True)
 
