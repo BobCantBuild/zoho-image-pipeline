@@ -57,42 +57,32 @@ div[data-testid="stStatusWidget"] { display:none !important; }
 .topbar-tval { font-size:20px; font-weight:700; color:#fff; margin-bottom:4px; }
 
 /* ── Metric Grid ─────────────────────────────────────────── */
-.mg-row   { display:flex; gap:10px; margin-bottom:22px; align-items:stretch; flex-wrap:nowrap; }
-.mg-card  { background:#fff; border:2px solid #e2e8f0; border-radius:13px;
-            padding:14px 14px 12px; box-shadow:0 2px 6px rgba(0,0,0,.05);
+.mg-row   { display:flex; gap:12px; margin-bottom:22px; align-items:stretch; }
+.mg-card  { background:#fff; border:2px solid #e2e8f0; border-radius:14px;
+            padding:16px 18px; box-shadow:0 2px 8px rgba(0,0,0,.05);
             display:flex; flex-direction:column; justify-content:center; }
-.mg-single{ flex:1.1; min-width:110px; text-align:center; }
-.mg-stack { flex:1.4; display:flex; flex-direction:column; gap:8px; min-width:150px; }
-.mg-stack .mg-card { flex:1; padding:10px 12px; }
-.mg-total { flex:2.8; min-width:220px; justify-content:flex-start; }
 
-.mg-title  { font-size:11px; font-weight:700; color:#64748b;
-             text-transform:uppercase; letter-spacing:.07em; margin-bottom:4px; }
-.mg-bignum { font-size:32px; font-weight:800; line-height:1.1; }
-.mg-path   { font-size:10px; color:#94a3b8; margin-top:5px;
-             word-break:break-all; line-height:1.4; }
-.mg-duo    { display:flex; gap:12px; justify-content:center; margin-top:5px; }
-.mg-duo-v  { text-align:center; }
-.mg-duo-n  { font-size:20px; font-weight:800; line-height:1; }
-.mg-duo-l  { font-size:10px; font-weight:700; text-transform:uppercase;
-             color:#64748b; margin-top:2px; letter-spacing:.05em; }
+/* Slim: just a big number + label */
+.mg-slim  { flex:0 0 130px; text-align:center; }
+.mg-title { font-size:11px; font-weight:700; color:#64748b;
+            text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px; }
+.mg-bignum{ font-size:36px; font-weight:800; line-height:1; }
+.mg-hint  { font-size:11px; color:#94a3b8; margin-top:6px; font-weight:500; }
 
-/* Total Data card internals */
-.mg-th     { display:flex; justify-content:space-between; align-items:flex-start;
-             border-bottom:2px solid #e2e8f0; padding-bottom:9px; margin-bottom:10px; }
-.mg-th-ttl { font-size:17px; font-weight:800; color:#0f172a; }
-.mg-th-sub { font-size:10px; color:#94a3b8; max-width:160px;
-             word-break:break-all; text-align:right; line-height:1.4; }
-.mg-tgrid  { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-.mg-tcell  { background:#f8fafc; border-radius:9px; padding:9px 11px; }
-.mg-tc-lbl { font-size:10px; font-weight:700; color:#64748b;
-             text-transform:uppercase; letter-spacing:.05em; }
-.mg-tc-val { font-size:22px; font-weight:800; line-height:1.2; margin-top:3px; }
+/* Wide: title + three equal sub-cells */
+.mg-wide  { flex:1; min-width:0; }
+.mg-trio  { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
+.mg-trio-cell {
+  border:1.5px solid #e2e8f0; border-radius:10px;
+  padding:10px 8px; text-align:center; background:#f8fafc;
+}
+.mg-trio-n { font-size:26px; font-weight:800; line-height:1; }
+.mg-trio-l { font-size:11px; font-weight:600; color:#64748b;
+             margin-top:5px; letter-spacing:.03em; }
 
 /* Colour helpers */
 .c-dark   { color:#0f172a; } .c-green  { color:#16a34a; } .c-red    { color:#dc2626; }
-.c-orange { color:#d97706; } .c-amber  { color:#f59e0b; } .c-gray   { color:#64748b; }
-.c-blue   { color:#2563eb; }
+.c-orange { color:#d97706; } .c-amber  { color:#d97706; } .c-gray   { color:#64748b; }
 
 /* Progress */
 .prog-wrap  { margin:4px 0 24px; }
@@ -409,106 +399,82 @@ try:
     from config import BASE_DIR as _BD
     _bp = Path(str(_BD))
     folder_count = sum(1 for e in _bp.iterdir() if e.is_dir()) if _bp.exists() else stats.get("total", 0)
-    folder_path  = str(_BD)
 except Exception:
     folder_count = stats.get("total", 0)
-    folder_path  = "—"
 
 _pend = stats.get("pending", 0)
+_done = folder_count - _pend
 
 st.markdown(f"""
 <div class="mg-row">
 
-  <!-- 1 · Data in pipeline -->
-  <div class="mg-card mg-single">
-    <div class="mg-title">Data in pipeline</div>
+  <!-- 1 · In Pipeline -->
+  <div class="mg-card mg-slim">
+    <div class="mg-title">In Pipeline</div>
     <div class="mg-bignum c-dark">{folder_count:,}</div>
-    <div class="mg-path">{folder_path}</div>
+    <div class="mg-hint">Total records</div>
   </div>
 
-  <!-- 2 · Processing -->
-  <div class="mg-card mg-single">
-    <div class="mg-title">Processing</div>
+  <!-- 2 · Pending -->
+  <div class="mg-card mg-slim">
+    <div class="mg-title">Pending</div>
     <div class="mg-bignum c-orange">{_pend:,}</div>
-    <div class="mg-path">python pipeline.py --limit 5<br>--fresh &nbsp;or&nbsp; pipeline.py</div>
+    <div class="mg-hint">Awaiting processing</div>
   </div>
 
-  <!-- 3 · Order ID Detected + Stars Detected -->
-  <div class="mg-stack">
-    <div class="mg-card">
-      <div class="mg-title">Order ID Detected</div>
-      <div class="mg-duo">
-        <div class="mg-duo-v">
-          <div class="mg-duo-n c-green">{oid_yes:,}</div>
-          <div class="mg-duo-l">YES</div>
-        </div>
-        <div class="mg-duo-v">
-          <div class="mg-duo-n c-red">{oid_no:,}</div>
-          <div class="mg-duo-l">NO</div>
-        </div>
+  <!-- 3 · Order ID Match breakdown -->
+  <div class="mg-card mg-wide">
+    <div class="mg-title">Order ID Match</div>
+    <div class="mg-trio">
+      <div class="mg-trio-cell" style="border-color:#bbf7d0;background:#f0fdf4;">
+        <div class="mg-trio-n c-green">{oid_yes:,}</div>
+        <div class="mg-trio-l">✓ Match</div>
       </div>
-    </div>
-    <div class="mg-card">
-      <div class="mg-title">Stars Detected</div>
-      <div class="mg-duo">
-        <div class="mg-duo-v">
-          <div class="mg-duo-n c-green">{star_yes:,}</div>
-          <div class="mg-duo-l">YES</div>
-        </div>
-        <div class="mg-duo-v">
-          <div class="mg-duo-n c-red">{star_no:,}</div>
-          <div class="mg-duo-l">NO</div>
-        </div>
+      <div class="mg-trio-cell" style="border-color:#fecaca;background:#fff1f2;">
+        <div class="mg-trio-n c-red">{oid_no:,}</div>
+        <div class="mg-trio-l">✕ Mismatch</div>
+      </div>
+      <div class="mg-trio-cell">
+        <div class="mg-trio-n c-gray">{oid_unv:,}</div>
+        <div class="mg-trio-l">— Un-Verified</div>
       </div>
     </div>
   </div>
 
-  <!-- 4 · Order ID Match / Mismatch -->
-  <div class="mg-stack">
-    <div class="mg-card" style="border-color:#bbf7d0;">
-      <div class="mg-title">Order ID Match</div>
-      <div class="mg-bignum c-green">{oid_yes:,}</div>
-    </div>
-    <div class="mg-card" style="border-color:#fecaca;">
-      <div class="mg-title">Order ID Mismatch</div>
-      <div class="mg-bignum c-red">{oid_no:,}</div>
+  <!-- 4 · Star Rating breakdown -->
+  <div class="mg-card mg-wide">
+    <div class="mg-title">Star Rating</div>
+    <div class="mg-trio">
+      <div class="mg-trio-cell" style="border-color:#fde68a;background:#fffbeb;">
+        <div class="mg-trio-n c-amber">{star_yes:,}</div>
+        <div class="mg-trio-l">★ ≥ 4</div>
+      </div>
+      <div class="mg-trio-cell">
+        <div class="mg-trio-n c-gray">{star_no:,}</div>
+        <div class="mg-trio-l">★ &lt; 4</div>
+      </div>
+      <div class="mg-trio-cell">
+        <div class="mg-trio-n c-gray">{star_unv:,}</div>
+        <div class="mg-trio-l">— Un-Verified</div>
+      </div>
     </div>
   </div>
 
-  <!-- 5 · Stars ≥4 / Stars <4 -->
-  <div class="mg-stack">
-    <div class="mg-card" style="border-color:#fde68a;">
-      <div class="mg-title">Stars ≥ 4</div>
-      <div class="mg-bignum c-amber">{star_yes:,}</div>
-    </div>
-    <div class="mg-card">
-      <div class="mg-title">Stars &lt; 4</div>
-      <div class="mg-bignum c-gray">{star_no:,}</div>
-    </div>
-  </div>
-
-  <!-- 6 · Total Data -->
-  <div class="mg-card mg-total">
-    <div class="mg-th">
-      <span class="mg-th-ttl">Total Data</span>
-      <span class="mg-th-sub">{folder_path}</span>
-    </div>
-    <div class="mg-tgrid">
-      <div class="mg-tcell">
-        <div class="mg-tc-lbl">Processing</div>
-        <div class="mg-tc-val c-orange">{_pend:,}</div>
+  <!-- 5 · Verified breakdown -->
+  <div class="mg-card mg-wide" style="border-color:#e0e7ff;">
+    <div class="mg-title">Verified</div>
+    <div class="mg-trio">
+      <div class="mg-trio-cell" style="border-color:#bbf7d0;background:#f0fdf4;">
+        <div class="mg-trio-n c-green">{v_yes:,}</div>
+        <div class="mg-trio-l">✓ YES</div>
       </div>
-      <div class="mg-tcell">
-        <div class="mg-tc-lbl">Verified — YES</div>
-        <div class="mg-tc-val c-green">{v_yes:,}</div>
+      <div class="mg-trio-cell" style="border-color:#fecaca;background:#fff1f2;">
+        <div class="mg-trio-n c-red">{v_no:,}</div>
+        <div class="mg-trio-l">✕ NO</div>
       </div>
-      <div class="mg-tcell">
-        <div class="mg-tc-lbl">Verified — NO</div>
-        <div class="mg-tc-val c-red">{v_no:,}</div>
-      </div>
-      <div class="mg-tcell">
-        <div class="mg-tc-lbl">Un-Verified</div>
-        <div class="mg-tc-val c-gray">{v_unv:,}</div>
+      <div class="mg-trio-cell">
+        <div class="mg-trio-n c-gray">{v_unv:,}</div>
+        <div class="mg-trio-l">— Un-Verified</div>
       </div>
     </div>
   </div>
