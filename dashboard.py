@@ -624,12 +624,13 @@ if "branch" in filt.columns and branch_filter != "All":
     filt = filt[filt["branch"].fillna("") == branch_filter]
 if "date_of_posting" in filt.columns:
     _dr = date_range if isinstance(date_range, (list, tuple)) else []
-    if len(_dr) == 2:
-        _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
-        filt = filt[(_dp >= _dr[0]) & (_dp <= _dr[1])]
-    elif len(_dr) == 1:
-        _dp = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
-        filt = filt[_dp >= _dr[0]]
+    if len(_dr) >= 1:
+        _dp  = pd.to_datetime(filt["date_of_posting"], errors="coerce").dt.date
+        _nat = _dp.isna()          # PENDING rows have no date — always include them
+        if len(_dr) == 2:
+            filt = filt[_nat | ((_dp >= _dr[0]) & (_dp <= _dr[1]))]
+        else:                       # only "from" date selected
+            filt = filt[_nat | (_dp >= _dr[0])]
 if search:
     s = search.lower()
     filt = filt[
@@ -673,19 +674,26 @@ page_df = filt.iloc[start: start + PAGE_SIZE]
 
 rows_html = ""
 for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
+    _pflag   = str(row.get("pipeline_flag","") or "")
+    _pending = "PENDING" in _pflag
+    # Dim the entire row while the record is still being processed
+    _row_style = ' style="opacity:.45;background:#fafafa;"' if _pending else ""
+    # Pending badge replaces all flag cells for unprocessed rows
+    _pend_cell = '<td class="ctr" style="background:#fef9c3"><span class="badge" style="background:#fef08a;color:#854d0e">⏳ Pending</span></td>'
+
     rows_html += f"""
-    <tr>
+    <tr{_row_style}>
       <td class="num">{i}</td>
       <td class="mono">{safe(row.get('date_of_posting_str',''))}</td>
       <td class="mono">{safe(row.get('branch',''))}</td>
       <td class="mono">{safe(row.get('ticket_id',''))}</td>
       <td class="mono">{safe(row.get('Zoho_order_ID',''))}</td>
       <td class="mono">{safe(row.get('file_order_id',''))}</td>
-      {flag_cell(row['Order_ID_Flag'])}
-      <td class="ctr">{star_html(row.get('file_star',''))}</td>
-      {flag_cell(row['file_star_flag'])}
+      {_pend_cell if _pending else flag_cell(row['Order_ID_Flag'])}
+      <td class="ctr">{safe('') if _pending else star_html(row.get('file_star',''))}</td>
+      {_pend_cell if _pending else flag_cell(row['file_star_flag'])}
       <td class="mono" style="color:#64748b;font-size:13px">{safe(row.get('file_name',''))}</td>
-      {flag_cell(row['Flag'])}
+      {_pend_cell if _pending else flag_cell(row['Flag'])}
     </tr>"""
 
 st.markdown(f"""
@@ -736,17 +744,23 @@ st.markdown(
 
 
 # =============================================================
-#  AUTO REFRESH — every 8 s, unconditionally
+#  AUTO REFRESH
 #
-#  No explicit cache.clear() needed: load_data() uses the current
-#  file mtime as a cache-key argument. On each rerun Streamlit
-#  re-evaluates _file_mtime(DB_PATH / CSV_PATH).
-#    • mtime unchanged  →  cache HIT  (instant, no DB read)
-#    • mtime changed    →  cache MISS →  fresh DB/CSV read
+#  Strategy:
+#    1. While pipeline is running (pending > 0): poll every 5 s.
+#    2. Right after a DB change (e.g. --fresh, new run, merge):
+#       detect via mtime stored in session_state → one refresh cycle.
+#    3. When idle + no changes: NO sleep, UI stays fully responsive.
 #
-#  This means any pipeline write (including --fresh) is reflected
-#  within 8 s automatically, with zero manual refresh needed.
+#  The mtime cache-key on load_data() means no explicit
+#  cache.clear() is needed — a changed mtime = automatic cache miss.
 # =============================================================
 
-time.sleep(8)
-st.rerun()
+_prev_db_mtime = st.session_state.get("_last_db_mtime", 0.0)
+st.session_state["_last_db_mtime"] = _db_mtime
+
+_db_just_changed = (_db_mtime != _prev_db_mtime)
+
+if pending > 0 or _db_just_changed:
+    time.sleep(5)
+    st.rerun()
