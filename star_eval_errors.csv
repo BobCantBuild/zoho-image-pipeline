@@ -1,0 +1,15 @@
+idx,image,actual,predicted,strategy,remarks
+3,ImageUpload1,0,None,none,No stars in this picture
+4,ImageUpload1,4,5,ocr_label,This has 1 gold star and 3 dark star behind gold
+5,ImageUpload1,4,5,ocr_label,Gold/ Yellow color stars at the staring row
+13,ImageUpload1,0,None,none,There is no star  in color at all so 0 as count
+18,ImageUpload1,5,None,none,This has 5 Green colored star in row
+22,ImageUpload1,0,None,none,This has no color star at-all. So 0 stars
+23,ImageUpload1,0,None,none,This has no color star at-all. So 0 stars
+28,ImageUpload1,4,None,none,This has 4 green color stars in row
+34,ImageUpload1,5,None,none,This has 5 Green colored star in row
+41,ImageUpload1,5,3,slot,This has 1 Gold star and 4 dark star behind gold
+44,ImageUpload1,0,1,slot,"This has 0 colored stars, so it is 0 stars"
+46,ImageUpload1,5,None,none,This has 5 Green colored star in row
+49,ImageUpload1,5,4,ocr_label,This has 5 Green colored star in row
+54,ImageUpload1,5,None,none,This has 5 gold colored star in row

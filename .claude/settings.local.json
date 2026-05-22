@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python star_eval.py)",
+      "Bash(Get-Content \"C:\\\\Users\\\\aswin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--myfiles-IFB-Project-IT-zoho-image-pipeline\\\\14732131-8ab4-4b7a-b431-0bfdf35edcc0\\\\tasks\\\\bx5sr7315.output\" -Tail 40)"
+    ]
+  }
+}
