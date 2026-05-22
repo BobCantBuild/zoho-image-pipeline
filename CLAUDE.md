@@ -1,6 +1,6 @@
 # CLAUDE.md — Project Memory: Zoho Image Pipeline
 
-> Last updated: 2026-05-21 (session 2)
+> Last updated: 2026-05-22 (session 3)
 > This file is the authoritative memory for Claude across all sessions.
 > Read this first before touching any file.
 
@@ -227,10 +227,57 @@ calls `git push origin <branch>` explicitly. **Never use bare `git push`** — t
 | Search bottom border invisible | Streamlit BaseUI wrapper `div[data-baseweb="input"]` overrides `<input>` border | Border CSS moved to `div[data-baseweb="input"]`, raw `<input>` set to `border:none` |
 | Streamlit shows stale 10-record data despite 15-record syncs | Branch tracks `ifb/main`; bare `git push` sent to `IFB-Analytics/zoho-form-audit`, not the Streamlit-deployed `BobCantBuild/zoho-image-pipeline` | `sync_to_github.py` now calls `git push origin <branch>` explicitly |
 | "Data last synced" time was wrong on cloud | `CSV_PATH.stat().st_mtime` returns container clone time on Streamlit Cloud, not actual data sync time | Write `data/last_sync.txt` with real timestamp on every sync; dashboard reads that file |
+| Star = 4 on rotated screenshot (should be 3) | `_build_star_rows` scans horizontally; rotated image puts category cluster in wrong band → Strategy A picks highest count (4) | Added `_auto_rotate()` in `preprocess_for_stars()` using Hough lines to correct ±90° rotation first |
+| Emoji Great star (🌟) detected as 1 or 2 | Emoji shape fails `_is_star_like_contour` (wrong solidity/defects) → xs empty → falls to bad fallback | Strategy B now uses raw mask median-x (no shape filter) for the colored blob |
+| Flipkart single-star position mapped wrong | Edge-based grid used too many noisy contours; mapping to slot 1 when star was at position 5 | `_detect_all_star_slots()` uses Otsu threshold + Canny combined; `_position_of_colored_star()` maps to nearest slot |
+| Flipkart category rows inflate star count | Strategy A picked highest blob-count row → category rows with 4+ blobs beat real 3-star | Strategy A now picks TOPMOST multi-star row (not highest count) |
+| Flipkart Order Details green stars not detected | Green stars are muted (low saturation) — outside old `mask_g` HSV range | Added `mask_g_muted` band `[38,30,50]–[90,160,200]` with lighter sat/val gate |
+| Star detection fails entirely on edge-case images | Color + shape pipeline returns None with no fallback | Added OCR label fallback in `extract_star_rating()`: reads "Terrible/Bad/Okay/Good/Great" from OCR text → maps to 1–5 |
 
 ---
 
-## 12. Pipeline CLI Reference
+## 12. Star Detection Architecture (v3)
+
+### Two UI patterns handled
+
+| UI | Pattern | Detection method |
+|---|---|---|
+| **Amazon** | 1–5 filled yellow stars in a row | Count colored blobs in topmost multi-star row (Strategy A) |
+| **Flipkart label-select** | 4 dark stars + 1 colored emoji/star | `_detect_all_star_slots()` finds all 5 positions; `_position_of_colored_star()` maps colored blob to slot (Strategy B) |
+| **Flipkart Order Details** | 5 small muted-green stars | Expanded HSV mask catches them; same counting logic |
+
+### Strategy cascade (`_star_from_image`)
+```
+A → topmost row with 3–5 colored blobs (Amazon style)
+B → any row with 1–2 colored blobs:
+    - Median-x of colored pixels (robust vs emoji shape)
+    - _detect_all_star_slots() in y-band (Otsu + Canny combined)
+    - _position_of_colored_star() → slot 1-5
+    - Fallback: linear x-interpolation
+C → Amazon fallback if B produced no result
+OCR → _star_from_label() reads Terrible/Bad/Okay/Good/Great → 1-5
+```
+
+### Key functions (ocr_engine.py)
+| Function | Purpose |
+|---|---|
+| `_detect_all_star_slots(img, y0, y1)` | Find ALL icon x-centres (dark + colored) using Otsu + Canny |
+| `_position_of_colored_star(x, slots)` | Map colored blob x to nearest slot in 1-5 grid |
+| `_star_from_label(text)` | OCR text → rating label → int (OCR fallback) |
+| `_auto_rotate(img)` | Correct ±90° rotation using Hough dominant-line angle |
+
+### HSV colour ranges (image_preprocess.py)
+| Mask | HSV range | Covers |
+|---|---|---|
+| `mask_y` | `[18,80,80]–[35,255,255]` | Yellow/gold (Amazon, Flipkart filled) |
+| `mask_d` | `[15,35,40]–[40,220,220]` | Dim yellow (dark mode) |
+| `mask_o` | `[0,80,70]–[18,255,255]` | Orange (warm WB shift) |
+| `mask_g_bright` | `[40,70,70]–[95,255,255]` | Bright green |
+| `mask_g_muted` | `[38,30,50]–[90,160,200]` | Muted green (Flipkart Order Details) |
+
+---
+
+## 13. Pipeline CLI Reference
 
 ```bash
 python pipeline.py                   # process all new (auto-resumes)
