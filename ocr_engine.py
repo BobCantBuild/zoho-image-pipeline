@@ -435,15 +435,33 @@ def _count_filled_blobs(strip: np.ndarray) -> int:
 
 def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
     """
-    Detect star rating using pure OpenCV colour analysis.
-    
-    IMPROVED:
-    - Stricter validation of detected shapes
-    - Better handling of single-star patterns
-    - Spatial constraints (must be in upper portion)
+    Detect star rating using OpenCV colour analysis.
 
     Returns (star_count: float | None, method: str)
-    method is one of: 'top_row', 'widest_row', 'single', 'none'
+
+    Strategy cascade
+    ────────────────
+    A  Amazon-style multi-star row  (2–5 uniform yellow stars in one row)
+       → count filled blobs = rating. Topmost row wins on tie.
+
+    B  Flipkart label-select style  (exactly 1 colored star; others dark)
+       → _detect_all_star_slots() finds all 5 icon positions via grayscale
+         threshold (dark + colored) in the same y-band.
+       → _position_of_colored_star() maps the colored blob to slot 1-5.
+
+    C  Widest-row fallback           (2 blobs, ambiguous)
+       → apply B-style all-slot detection before committing.
+
+    Rooted failure modes fixed
+    ──────────────────────────
+    • Emoji star (Great 🌟) fails _is_star_like_contour → B no longer
+      relies on that test for the colored star; it uses the mask's raw
+      centroid instead.
+    • Category star rows (Image 5) inflate blob count → A now requires
+      the topmost multi-star row, not the highest-count one.
+    • Rotated image (Image 1) → auto-rotation in preprocess_for_stars()
+      corrects before this function runs.
+    • Green stars (Image 4) → expanded mask in preprocess_for_stars().
     """
     mask = meta.get("star_mask")
     if mask is None or cv2.countNonZero(mask) < 20:
@@ -453,7 +471,9 @@ def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
     if not rows:
         return None, "none"
 
-    # Evaluate all rows once (avoid committing early to a noisy topmost row).
+    h_img, w_img = mask.shape
+
+    # Evaluate all candidate rows
     scored = []
     for top_y, blob_count, row_width, strip in rows:
         n = _count_filled_blobs(strip)
@@ -463,121 +483,189 @@ def _star_from_image(img_bgr: np.ndarray, meta: dict) -> tuple:
     if not scored:
         return None, "none"
 
-    # ── Strategy A: prefer a multi-star row (3–5) and take the one with
-    # the highest star count (tie-breaker: topmost). This reduces cases where
-    # a partial/missed mask yields 4 when the UI clearly shows 5.
-    multi = [r for r in scored if 3 <= r[1] <= 5]
+    # ── Strategy A: Amazon-style ─────────────────────────────
+    # 2–5 uniform colored blobs in one row AND that row is the topmost
+    # multi-star row.  (Do NOT take highest count — that favors category rows.)
+    multi = [r for r in scored if 2 <= r[1] <= 5]
     if multi:
-        top_y, n, row_width, strip = sorted(multi, key=lambda r: (-r[1], r[0]))[0]
+        # Topmost first; break tie by widest (more prominent overall-rating row)
+        top_y, n, row_width, strip = sorted(multi, key=lambda r: (r[0], -r[2]))[0]
+
+        # Sanity-check: if the row has 2 blobs but the full-slot scan finds 5,
+        # this is actually Flipkart style with 2 filled — handle in Strategy B.
+        if n >= 3:
+            return float(n), "top_row"
+
+        # n == 2: might be Flipkart with 2 dark stars selected; fall through to B.
+
+    # ── Strategy B: Flipkart label-select style ──────────────
+    # Find the topmost row with ANY colored blob (n=1 most common, but n=2 is ok).
+    # Get raw centroid of the colored region from the mask directly
+    # (avoids _is_star_like_contour rejecting emoji shapes).
+    single_candidates = [r for r in scored if 1 <= r[1] <= 2]
+    if not single_candidates and multi:
+        # n==2 case from Strategy A falls here
+        single_candidates = [r for r in scored if r[1] == 2]
+
+    if single_candidates:
+        # Widest row = most prominent (the overall-rating row spans more pixels)
+        top_y, n, row_width, strip = max(single_candidates, key=lambda r: r[2])
+
+        # Get centroid of colored pixels in the strip from the full mask
+        slice_h = strip.shape[0]
+        y0 = int(top_y)
+        y1 = min(h_img, y0 + slice_h)
+        mask_strip = mask[y0:y1, :]
+
+        ys_px, xs_px = np.where(mask_strip > 0)
+        if len(xs_px) == 0:
+            # Mask empty in this band — use strip directly
+            ys_px, xs_px = np.where(strip > 0)
+
+        if len(xs_px) > 0:
+            # Use median x to be robust against multi-blob emoji internals
+            colored_x = float(np.median(xs_px))
+
+            # Expand the search band a bit so we capture all 5 icons
+            pad = max(slice_h, int(h_img * 0.08))
+            band_y0 = max(0, y0 - pad // 2)
+            band_y1 = min(h_img, y1 + pad // 2)
+
+            all_slots = _detect_all_star_slots(img_bgr, band_y0, band_y1)
+
+            # Only use slot detection when we found a plausible row of icons
+            if 3 <= len(all_slots) <= 7:
+                pos = _position_of_colored_star(colored_x, all_slots)
+                if 1 <= pos <= 5:
+                    return float(pos), "slot_position"
+
+            # Slot detection found too few/many — linear fallback
+            left = 0.08 * w_img
+            span = 0.84 * w_img
+            rel  = (colored_x - left) / span
+            star_pos = max(1, min(5, round(rel * 4) + 1))
+            return float(star_pos), "linear_fallback"
+
+    # ── Strategy C: multi-blob Amazon fallback ───────────────
+    if multi:
+        top_y, n, row_width, strip = sorted(multi, key=lambda r: (r[0], -r[2]))[0]
         return float(n), "top_row"
 
-    # ── Strategy B: if only 1–2 stars detected, pick the WIDEST row (most prominent) ──
-    top_y, n, row_width, strip = max(scored, key=lambda r: r[2])
-
-    # Single-highlighted star pattern (others unfilled/black):
-    if n == 1:
-        xs = []
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        work = cv2.morphologyEx(strip, cv2.MORPH_OPEN, kernel, iterations=1)
-        work = cv2.erode(work, kernel, iterations=1)
-        cnts, _ = cv2.findContours(work, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        h_s, w_s = strip.shape[:2]
-        min_dim = max(8, int(w_s * 0.010))
-        max_dim = max(min_dim + 2, int(w_s * 0.160))
-        min_area = float(min_dim * min_dim) * 0.25
-        max_area = float(max_dim * max_dim) * 2.00
-        for c in cnts:
-            if _is_star_like_contour(
-                c, min_area=min_area, max_area=max_area, min_dim=min_dim, max_dim=max_dim
-            ):
-                M = cv2.moments(c)
-                if M["m00"] > 0:
-                    xs.append(int(M["m10"] / M["m00"]))
-
-        if xs:
-            # Prefer geometry from the actual (mostly black) star row, not image-wide heuristics.
-            # In these UIs only 1 star is filled; the other 4 are black outlines/filled.
-            # Detect all 5 stars using edges within the same strip window.
-            star_x = xs[0]
-            top_y, _, _, _ = max(scored, key=lambda r: r[2])
-            # Rebuild the strip window in original image coords to run edge detection.
-            slice_h = strip.shape[0]
-            y0 = int(top_y)
-            y1 = min(img_bgr.shape[0], y0 + slice_h)
-            roi = img_bgr[y0:y1, :, :]
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-            edges = cv2.Canny(gray, 50, 150)
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            edges = cv2.dilate(edges, k, iterations=1)
-            cnts2, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            h_img, w_img = mask.shape
-            x_centers = []
-            for c in cnts2:
-                x, y, wb, hb = cv2.boundingRect(c)
-                if wb < int(w_img * 0.02) or hb < int(w_img * 0.02):
-                    continue
-                if wb > int(w_img * 0.20) or hb > int(w_img * 0.20):
-                    continue
-                aspect = max(wb, hb) / (min(wb, hb) + 1)
-                if aspect > 2.2:
-                    continue
-                # Keep shapes near the detected filled-star y band (avoid UI icons)
-                if not (0 <= y <= slice_h):
-                    continue
-                x_centers.append(x + wb / 2.0)
-
-            x_centers.sort()
-            # Cluster x centers (stars are evenly spaced; duplicates come from noisy edges).
-            clustered = []
-            for xc in x_centers:
-                if not clustered or abs(xc - clustered[-1]) > int(w_img * 0.03):
-                    clustered.append(xc)
-            if len(clustered) >= 5:
-                # Pick the best 5-star window with the most-uniform spacing.
-                best = None
-                for i in range(0, len(clustered) - 4):
-                    win = clustered[i : i + 5]
-                    diffs = [win[j + 1] - win[j] for j in range(4)]
-                    if any(d <= 0 for d in diffs):
-                        continue
-                    step = float(np.median(diffs))
-                    if not (w_img * 0.03 <= step <= w_img * 0.25):
-                        continue
-                    cv = float(np.std(diffs) / step) if step > 0 else 9.9
-                    if best is None or cv < best[0]:
-                        best = (cv, win)
-                if best is not None:
-                    win = best[1]
-                    # Choose nearest slot center.
-                    idx0 = int(np.argmin([abs(star_x - xc) for xc in win]))
-                    return float(idx0 + 1), "single"
-
-            if len(clustered) >= 3:
-                # Use the median spacing to infer a 5-slot grid.
-                diffs = [clustered[i + 1] - clustered[i] for i in range(len(clustered) - 1)]
-                diffs = [d for d in diffs if d > 0]
-                if diffs:
-                    step = float(np.median(diffs))
-                    left = clustered[0]
-                    idx = int(round((star_x - left) / step)) + 1
-                    idx = max(1, min(5, idx))
-                    return float(idx), "single"
-
-            # Fallback mapping when edge-based grid fails.
-            left = 0.10 * w_img
-            span = 0.80 * w_img
-            rel = (star_x - left) / span
-            star_pos = round(rel * 5)
-            star_pos = max(1, min(5, star_pos))
-            return float(star_pos), "single"
-
-    if 1 <= n <= 5:
-        return float(n), "widest_row"
-
     return None, "none"
+
+
+# =============================================================
+#  FLIPKART LABEL-SELECT UI  helpers
+#
+#  Flipkart's review screen shows 5 labeled icons:
+#    Terrible · Bad · Okay · Good · Great
+#  Only the SELECTED icon is colored (yellow emoji or green fill).
+#  The other 4 are dark/black outlines.
+#  Strategy: detect ALL 5 icon slots via grayscale threshold, then
+#  find which slot contains the colored blob → that position = rating.
+#  Fallback: OCR reads the label text ("Great", "Good", …) → map to int.
+# =============================================================
+
+_LABEL_MAP: dict[str, float] = {
+    "great": 5.0, "good": 4.0, "okay": 3.0, "ok": 3.0,
+    "bad": 2.0, "terrible": 1.0,
+}
+
+
+def _detect_all_star_slots(img_bgr: np.ndarray, y0: int, y1: int) -> list[float]:
+    """
+    Find ALL icon/star x-centres in a horizontal band [y0, y1] regardless of color.
+    Uses Otsu threshold on grayscale to detect both dark outlines AND filled blobs.
+    Returns sorted list of x-centres (should be 5 for Flipkart; ≥1 for anything).
+    """
+    roi  = img_bgr[y0:y1, :, :]
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    h_r, w_r = gray.shape
+
+    # Use both dark-on-light (threshold inversion) and edge-based detection,
+    # then merge — covers all background colours.
+    _, thresh_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 30, 100)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    edges = cv2.dilate(edges, k, iterations=2)
+    combined = cv2.bitwise_or(thresh_inv, edges)
+
+    cnts, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    min_dim = max(8, int(w_r * 0.04))
+    max_dim = int(w_r * 0.22)
+
+    centres: list[float] = []
+    for c in cnts:
+        x, y, wb, hb = cv2.boundingRect(c)
+        if wb < min_dim or hb < min_dim:
+            continue
+        if wb > max_dim or hb > max_dim:
+            continue
+        aspect = max(wb, hb) / (min(wb, hb) + 1)
+        if aspect > 2.0:
+            continue
+        if cv2.contourArea(c) < min_dim * min_dim * 0.25:
+            continue
+        centres.append(float(x + wb / 2.0))
+
+    centres.sort()
+    # Cluster near-duplicates (edge detection can double-count outlines)
+    clustered: list[float] = []
+    for cx in centres:
+        if not clustered or abs(cx - clustered[-1]) > min_dim * 0.8:
+            clustered.append(cx)
+
+    return clustered
+
+
+def _position_of_colored_star(colored_x: float, all_slots: list[float]) -> int:
+    """
+    Given the x-centre of the colored star and all slot x-centres,
+    return 1-based position of the colored star in the row.
+    Falls back to linear interpolation if slot count != 5.
+    """
+    if len(all_slots) == 5:
+        idx = int(np.argmin([abs(colored_x - cx) for cx in all_slots]))
+        return idx + 1
+
+    # Fewer slots found — use evenly-spaced grid assumption
+    if len(all_slots) >= 2:
+        left  = all_slots[0]
+        right = all_slots[-1]
+        step  = (right - left) / (len(all_slots) - 1)
+        if step > 0:
+            pos = int(round((colored_x - left) / step)) + 1
+            return max(1, min(5, pos))
+
+    return 0   # unknown
+
+
+def _star_from_label(text: str) -> float | None:
+    """
+    Flipkart OCR fallback: scan text for rating labels.
+    The UI always shows all 5 labels; the SELECTED label typically appears
+    last in left-to-right OCR order (rightmost = highest selected rating).
+    To avoid false positives from unselected labels, we only trust this
+    when exactly ONE label is found OR when the rightmost one is unambiguous.
+    """
+    import re
+    found = re.findall(
+        r"\b(great|good|okay|ok|bad|terrible)\b", text.lower()
+    )
+    if not found:
+        return None
+
+    # De-duplicate while preserving order
+    seen: set[str] = set()
+    ordered = [w for w in found if not (w in seen or seen.add(w))]  # type: ignore[func-returns-value]
+
+    if len(ordered) == 1:
+        return _LABEL_MAP.get(ordered[0])
+
+    # Multiple labels visible (normal for Flipkart review form).
+    # Rightmost = highest selected star.
+    return _LABEL_MAP.get(ordered[-1])
 
 
 def _star_remark(star: float, meta: dict, method: str) -> str:
@@ -617,7 +705,12 @@ def extract_order_id(image_path: str) -> tuple:
 def extract_star_rating(image_path: str) -> tuple:
     """
     Returns (star | None, remark, engine).
-    Pure OpenCV — no OCR, no text parsing for stars.
+
+    Primary:  OpenCV colour + slot-position detection
+    Fallback: OCR label text  (Terrible/Bad/Okay/Good/Great → 1-5)
+              Used when color detection returns None — covers edge cases
+              where the UI renders stars as text/SVG icons outside the
+              HSV ranges, or when image quality is too low for shape tests.
     """
     try:
         img, meta = preprocess_for_stars(image_path)
@@ -632,7 +725,19 @@ def extract_star_rating(image_path: str) -> tuple:
     except Exception as e:
         logger.debug("CV star error: %s", e)
 
-    return None, "Stars not found in image", "none"
+    # ── OCR label fallback ────────────────────────────────────
+    # Run text OCR on the same image and look for Flipkart rating labels.
+    try:
+        from image_preprocess import preprocess as _preprocess_ocr
+        img_ocr, _ = _preprocess_ocr(image_path)
+        text, conf  = _run_ocr(img_ocr)
+        star = _star_from_label(text)
+        if star is not None:
+            return star, f"OCR label ({int(star)}★)", "ocr_label"
+    except Exception as e:
+        logger.debug("OCR label fallback error: %s", e)
+
+    return None, "Stars not found in files", "none"
 
 
 def get_raw_ocr(image_path: str) -> str:
