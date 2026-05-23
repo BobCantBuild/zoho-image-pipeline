@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS zoho_records (
     image1_path            TEXT,
     image2_path            TEXT,
     file_order_id          TEXT,
+    service_rating         REAL,
+    product_rating         REAL,
     file_star              REAL,
     remarks_file_order_id  TEXT,
     remarks_file_star      TEXT,
@@ -32,6 +34,12 @@ CREATE INDEX IF NOT EXISTS ix_fname ON zoho_records(file_name);
 CREATE INDEX IF NOT EXISTS ix_flag  ON zoho_records(flag);
 """
 
+# New columns added after initial release — migrate existing DBs gracefully.
+_NEW_COLUMNS = [
+    ("service_rating", "REAL"),
+    ("product_rating", "REAL"),
+]
+
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
@@ -41,6 +49,16 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_db(conn: sqlite3.Connection):
+    """Add any columns introduced after initial schema creation."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(zoho_records)").fetchall()}
+    for col_name, col_type in _NEW_COLUMNS:
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE zoho_records ADD COLUMN {col_name} {col_type}")
+            logger.info("DB migration: added column %s %s", col_name, col_type)
+    conn.commit()
+
+
 def init_db():
     with get_conn() as c:
         for stmt in _DDL.strip().split(";"):
@@ -48,6 +66,7 @@ def init_db():
             if stmt:
                 c.execute(stmt)
         c.commit()
+        _migrate_db(c)
     logger.info("DB ready at %s", DB_PATH)
 
 

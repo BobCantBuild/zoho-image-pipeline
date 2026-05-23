@@ -18,7 +18,7 @@ from config import (
     IMAGE_FOLDER_1, IMAGE_FOLDER_2, OCR_WORKERS
 )
 from db       import init_db, upsert_record, fetch_ok_names, get_stats
-from ocr_engine import extract_order_id, extract_star_rating, get_raw_ocr
+from ocr_engine import extract_order_id, extract_star_rating, get_raw_ocr, classify_star_category
 
 # ── Logging → file only; terminal output via print() ──────────
 logging.basicConfig(
@@ -80,7 +80,9 @@ def process_record(rec: dict, debug: bool = False) -> dict:
         image1_path           = img1,
         image2_path           = img2,
         file_order_id         = None,
-        file_star             = None,
+        service_rating        = None,   # stars when image shows "Installation and Demo"
+        product_rating        = None,   # stars when image shows "Rate your experience"
+        file_star             = None,   # stars when neither keyword detected (general)
         remarks_file_order_id = None,
         remarks_file_star     = None,
         flag                  = None,
@@ -121,22 +123,44 @@ def process_record(rec: dict, debug: bool = False) -> dict:
 
     # ── STAR RATING ──────────────────────────────────────────
     star = rem_s = eng_s = None
+    star_img_text = ""      # OCR text of the image that yielded the star count
 
     if img2:
         if out["raw_ocr_image2"] is None:
             out["raw_ocr_image2"] = get_raw_ocr(img2)
+        star_img_text = out["raw_ocr_image2"] or ""
         star, rem_s, eng_s = extract_star_rating(img2)
 
     if star is None and img1:
         star, rem_s, eng_s = extract_star_rating(img1)
         if star is not None:
+            star_img_text = out.get("raw_ocr_image1") or ""
             rem_s = "Stars found in Image1"
 
     if star is None:
         rem_s = "Stars not found in files"
         flags.append("NO_STAR")
 
-    out.update(file_star=star, remarks_file_star=rem_s, ocr_engine_star=eng_s)
+    # ── Route star count into the correct category field ─────
+    # Exactly one of service_rating / product_rating / file_star
+    # will be set; the others stay None.
+    service_rating = product_rating = file_star_val = None
+    if star is not None:
+        category = classify_star_category(star_img_text)
+        if category == "service":
+            service_rating = star
+        elif category == "product":
+            product_rating = star
+        else:
+            file_star_val = star   # general / unknown context
+
+    out.update(
+        service_rating  = service_rating,
+        product_rating  = product_rating,
+        file_star       = file_star_val,
+        remarks_file_star = rem_s,
+        ocr_engine_star   = eng_s,
+    )
 
     # ── FLAGS ─────────────────────────────────────────────────
     if not img1: flags.append("MISSING_IMG1")

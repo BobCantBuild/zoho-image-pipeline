@@ -641,6 +641,46 @@ def _position_of_colored_star(colored_x: float, all_slots: list[float]) -> int:
     return 0   # unknown
 
 
+def classify_star_category(text: str) -> str:
+    """
+    Examine the raw OCR text from the star-rating image and return which
+    rating category the star count belongs to:
+
+      "service"  — screen shows "Installation and Demo" (or similar)
+      "product"  — screen shows "Rate your experience" (or similar)
+      "general"  — neither keyword detected (default / unknown)
+
+    Fuzzy matching tolerates minor OCR typos / spacing errors.
+    Uses a sliding-window SequenceMatcher so partial-line matches work.
+    """
+    from difflib import SequenceMatcher
+
+    # Normalise: collapse whitespace, lowercase
+    tl = " ".join(text.lower().split())
+
+    def _fuzzy_in(phrase: str, threshold: float = 0.72) -> bool:
+        pl = phrase.lower()
+        if pl in tl:
+            return True
+        plen = len(pl)
+        if plen == 0:
+            return False
+        # Slide a window the same length as the phrase across the text.
+        # max(1, …) ensures we always do at least one comparison even
+        # when the text is shorter than the phrase.
+        for i in range(max(1, len(tl) - plen + 1)):
+            seg = tl[i: i + plen]   # Python slicing handles OOB gracefully
+            if SequenceMatcher(None, pl, seg).ratio() >= threshold:
+                return True
+        return False
+
+    if _fuzzy_in("installation and demo"):
+        return "service"
+    if _fuzzy_in("rate your experience"):
+        return "product"
+    return "general"
+
+
 def _star_from_label(text: str) -> float | None:
     """
     Flipkart OCR fallback: scan text for rating labels.
@@ -738,6 +778,10 @@ def extract_star_rating(image_path: str) -> tuple:
         logger.debug("OCR label fallback error: %s", e)
 
     return None, "Stars not found in files", "none"
+
+
+# classify_star_category is already defined above — re-export for callers.
+# (imported directly by pipeline.py: from ocr_engine import classify_star_category)
 
 
 def get_raw_ocr(image_path: str) -> str:

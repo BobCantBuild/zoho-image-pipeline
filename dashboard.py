@@ -261,11 +261,13 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
         return "YES" if z == f else "NO"
 
     def star_flag(r):
-        val = r.get("file_star", None)
-        if _is_blank(val):
-            return "Un-Verified"   # Star rating not extracted from image
-        try:    return "YES" if float(val) >= 4 else "NO"
-        except: return "Un-Verified"
+        # Use whichever rating column is populated (service > product > general)
+        for col in ("service_rating", "product_rating", "file_star"):
+            val = r.get(col, None)
+            if not _is_blank(val):
+                try:    return "YES" if float(val) >= 4 else "NO"
+                except: continue
+        return "Un-Verified"   # No star rating extracted from image
 
     def verified_flag(r):
         oid  = r["Order_ID_Flag"]
@@ -311,7 +313,10 @@ def load_data(db_mtime: float, csv_mtime: float) -> tuple:
             df = pd.read_sql_query("""
                 SELECT sno, added_time, branch, ticket_id,
                        csv_order_id AS Zoho_order_ID,
-                       file_order_id, file_star, file_name,
+                       file_order_id,
+                       COALESCE(service_rating, NULL) AS service_rating,
+                       COALESCE(product_rating, NULL) AS product_rating,
+                       file_star, file_name,
                        flag AS pipeline_flag,
                        remarks_file_order_id, remarks_file_star
                 FROM zoho_records ORDER BY sno
@@ -337,6 +342,10 @@ def load_data(db_mtime: float, csv_mtime: float) -> tuple:
     # ── Fallback: CSV from repo (cloud / shared access) ───────
     if CSV_PATH.exists():
         df = pd.read_csv(CSV_PATH, encoding="utf-8-sig", dtype=str)
+        # Ensure new columns exist even in older CSV snapshots
+        for _col in ("service_rating", "product_rating"):
+            if _col not in df.columns:
+                df[_col] = None
         pf = df.get("pipeline_flag", pd.Series(dtype=str))
         stats = {
             "total":        len(df),
@@ -662,11 +671,14 @@ st.session_state["_total_pages"] = total_pages   # used by _next_page callback
 
 # ── Fill export button now that filt is ready ─────────────────
 exp_cols = ["sno","date_of_posting_str","branch","ticket_id","Zoho_order_ID",
-            "file_order_id","Order_ID_Flag","file_star","file_star_flag","file_name","Flag"]
+            "file_order_id","Order_ID_Flag",
+            "service_rating","product_rating","file_star",
+            "file_star_flag","file_name","Flag"]
 exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
 exp_df.columns = ["#","Date of Posting","Branch","Ticket ID","Zoho Order ID",
-                  "File Order ID","Order ID Match","Star Rating","Star ≥ 4",
-                  "File Name","Verified"][: len(exp_df.columns)]
+                  "File Order ID","Order ID Match",
+                  "Service Rating","Product Rating","Star Rating",
+                  "Star ≥ 4","File Name","Verified"][: len(exp_df.columns)]
 with export_slot:
     st.download_button("⬇️ Export to CSV",
                        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
@@ -706,6 +718,8 @@ for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
       <td class="mono">{safe(row.get('Zoho_order_ID',''))}</td>
       <td class="mono">{safe(row.get('file_order_id',''))}</td>
       {_pend_cell if _pending else flag_cell(row['Order_ID_Flag'])}
+      <td class="ctr">{safe('') if _pending else star_html(row.get('service_rating',''))}</td>
+      <td class="ctr">{safe('') if _pending else star_html(row.get('product_rating',''))}</td>
       <td class="ctr">{safe('') if _pending else star_html(row.get('file_star',''))}</td>
       {_pend_cell if _pending else flag_cell(row['file_star_flag'])}
       <td class="mono" style="color:#64748b;font-size:13px">{safe(row.get('file_name',''))}</td>
@@ -724,6 +738,8 @@ st.markdown(f"""
       <th>Zoho Order ID</th>
       <th>File Order ID</th>
       <th style="text-align:center">Order ID Match</th>
+      <th style="text-align:center">Service Rating</th>
+      <th style="text-align:center">Product Rating</th>
       <th style="text-align:center">Star Rating</th>
       <th style="text-align:center">Star ≥ 4</th>
       <th>File Name</th>

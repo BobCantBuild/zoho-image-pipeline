@@ -46,6 +46,8 @@ def export_db_to_csv(csv_path: Path):
             ticket_id,
             csv_order_id        AS Zoho_order_ID,
             file_order_id,
+            service_rating,
+            product_rating,
             file_star,
             file_name,
             flag                AS pipeline_flag,
