@@ -302,7 +302,19 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
         z = normalise_oid(r.get("Zoho_order_ID", ""))
         if not z:
             return "Un-Verified"   # Zoho Order ID missing
-        return "YES" if z == f else "NO"
+
+        # Exact match — always YES
+        if z == f:
+            return "YES"
+
+        # Count character-level differences (handles length mismatches too)
+        # This is the basis for the red highlighting in File Order ID cell
+        diff_count = sum(1 for zc, fc in zip(z, f) if zc != fc)
+        diff_count += abs(len(z) - len(f))
+
+        # Accept up to 3 character differences as minor OCR errors
+        # Beyond 3 is considered a significant mismatch
+        return "YES" if diff_count <= 3 else "NO"
 
     def star_flag(r):
         # Use whichever rating column is populated (service > product > general)
