@@ -208,6 +208,64 @@ def normalise_oid(raw: str) -> str:
     s = re.sub(r"^0D", "OD", s)
     return s
 
+def _oid_digits(raw) -> str:
+    """
+    Extract ONLY the significant digits from any Order ID format for comparison.
+
+    Strips (in order):
+      # prefix         →  "#OD337..." becomes "OD337..."
+      OD / 0D prefix   →  "OD040310354857341953" becomes "040310354857341953"
+      non-digits        →  "403-1035435-7341953"  becomes "40310354357341953"
+      leading zeros     →  "040310354857341953"   becomes "40310354857341953"
+
+    This makes cross-format comparison work:
+      Amazon 3-7-7     "403-1035435-7341953"   →  "40310354357341953"
+      Flipkart OD+18   "OD040310354857341953"  →  "40310354857341953"
+      → 1-digit diff at position 8  →  within tolerance → YES
+    """
+    if _is_blank(raw):
+        return ""
+    s = str(raw).strip().upper()
+    s = s.lstrip("#")                        # strip # prefix
+    s = re.sub(r"^[O0]D", "", s)            # strip OD / 0D / oD
+    s = re.sub(r"[^\d]", "", s)             # keep only digits (drops dashes)
+    return s.lstrip("0") or "0"             # strip leading zeros
+
+def _oid_display_map(raw) -> tuple:
+    """
+    Returns (display_str, sig_positions) where:
+      display_str   — the string shown in the cell
+                      (OD normalised to 'OD'; Amazon dashes kept as-is)
+      sig_positions — list of indices in display_str that correspond to
+                      significant digits (same order as _oid_digits output)
+
+    This lets diff_oid_html() highlight EXACTLY the right characters in the
+    original display format, even when OD prefix or leading zeros are present.
+    """
+    if _is_blank(raw):
+        return "", []
+    s = str(raw).strip().upper().lstrip("#")
+    # Normalise OD/0D → "OD"
+    has_od = bool(re.match(r"^[O0]D", s))
+    prefix = "OD" if has_od else ""
+    after  = s[2:] if has_od else s
+    display = prefix + after           # e.g. "OD040310354857341953"
+
+    sig_positions: list[int] = []
+    found_sig = False
+    prefix_len = len(prefix)
+    for i, ch in enumerate(display):
+        if i < prefix_len:
+            continue                   # skip OD prefix chars
+        if not ch.isdigit():
+            continue                   # skip dashes, spaces, etc.
+        if not found_sig and ch == "0":
+            continue                   # skip leading zeros
+        found_sig = True
+        sig_positions.append(i)
+
+    return display, sig_positions
+
 def badge(val):
     if val == "YES":          return '<span class="badge b-yes">✓ YES</span>'
     if val == "NO":           return '<span class="badge b-no">✕ NO</span>'
@@ -236,45 +294,54 @@ def flag_cell(val):
 
 def diff_oid_html(zoho_raw, file_raw) -> str:
     """
-    Return HTML for the File Order ID cell.
+    Return HTML for the File Order ID cell with digit-level diff highlighting.
 
-    When the two normalised IDs differ, every character (or block of
-    characters) in the File Order ID that does NOT match the Zoho Order
-    ID is wrapped in a red highlight so the reviewer can see at a glance
-    exactly which digits are wrong.
+    Comparison is done on SIGNIFICANT DIGITS only (strips OD/0D prefix,
+    dashes, leading zeros) so Amazon 3-7-7 and Flipkart OD+18 formats
+    can be compared correctly even though their string representations
+    look completely different.
 
-    Falls back to plain text whenever one of the values is blank (the
-    Order_ID_Flag will already show 'Un-Verified' in that case).
+    The highlighted result preserves the original display format of the
+    File Order ID (OD prefix, leading zeros, dashes) — only the differing
+    digits are marked red.
     """
     if _is_blank(file_raw):
         return safe(file_raw)
 
-    f_norm = normalise_oid(str(file_raw))
-    if not f_norm:
+    display, f_sig_pos = _oid_display_map(file_raw)
+    if not display:
         return safe(file_raw)
+    if not f_sig_pos:
+        return display                         # all leading-zeros / prefix only
+
+    f_dig = "".join(display[p] for p in f_sig_pos)   # significant digits of file ID
 
     if _is_blank(zoho_raw):
-        return f_norm                          # nothing to compare against
+        return display                         # nothing to compare against
 
-    z_norm = normalise_oid(str(zoho_raw))
-    if not z_norm or z_norm == f_norm:
-        return f_norm                          # identical — no highlighting
+    z_dig = _oid_digits(zoho_raw)
+    if not z_dig or z_dig == f_dig:
+        return display                         # identical significant digits
 
-    # Align with SequenceMatcher and mark the differing blocks in f_norm
-    parts = []
+    # Map which positions in f_dig differ from z_dig
+    disp_to_sig = {pos: k for k, pos in enumerate(f_sig_pos)}
+    differ: set[int] = set()
     for tag, _, _, j1, j2 in SequenceMatcher(
-            None, z_norm, f_norm, autojunk=False).get_opcodes():
-        chunk = f_norm[j1:j2]
-        if not chunk:
-            continue                       # skip zero-length opcodes
-        if tag == "equal":
-            parts.append(chunk)
-        else:
+            None, z_dig, f_dig, autojunk=False).get_opcodes():
+        if tag != "equal":
+            differ.update(range(j1, j2))       # sig-digit indices that differ
+
+    # Reconstruct the display string with red highlights on differing positions
+    parts: list[str] = []
+    for i, ch in enumerate(display):
+        if i in disp_to_sig and disp_to_sig[i] in differ:
             parts.append(
                 f'<span style="color:#dc2626;font-weight:700;'
                 f'background:#fee2e2;border-radius:3px;padding:0 2px">'
-                f'{chunk}</span>'
+                f'{ch}</span>'
             )
+        else:
+            parts.append(ch)
     return "".join(parts)
 
 def _is_blank(val) -> bool:
@@ -295,25 +362,27 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
     def order_flag(r):
         raw_f = r.get("file_order_id", None)
         if _is_blank(raw_f):
-            return "Un-Verified"   # File Order ID not extracted — cannot determine match
-        f = normalise_oid(str(raw_f))
-        if not f:
+            return "Un-Verified"   # File Order ID not extracted
+
+        f_dig = _oid_digits(str(raw_f))
+        if not f_dig or f_dig == "0":
             return "Un-Verified"
-        z = normalise_oid(r.get("Zoho_order_ID", ""))
-        if not z:
+
+        z_dig = _oid_digits(r.get("Zoho_order_ID", ""))
+        if not z_dig or z_dig == "0":
             return "Un-Verified"   # Zoho Order ID missing
 
-        # Exact match — always YES
-        if z == f:
+        # Compare significant digits — format-agnostic:
+        # "403-1035435-7341953" and "OD040310354857341953" both reduce
+        # to their bare digit strings before comparison, so Amazon 3-7-7
+        # and Flipkart OD+18 formats can match each other correctly.
+        if z_dig == f_dig:
             return "YES"
 
-        # Count character-level differences (handles length mismatches too)
-        # This is the basis for the red highlighting in File Order ID cell
-        diff_count = sum(1 for zc, fc in zip(z, f) if zc != fc)
-        diff_count += abs(len(z) - len(f))
+        diff_count = sum(1 for a, b in zip(z_dig, f_dig) if a != b)
+        diff_count += abs(len(z_dig) - len(f_dig))
 
-        # Accept up to 3 character differences as minor OCR errors
-        # Beyond 3 is considered a significant mismatch
+        # Accept up to 3 digit differences (minor OCR errors)
         return "YES" if diff_count <= 3 else "NO"
 
     def star_flag(r):
