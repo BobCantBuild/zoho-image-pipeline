@@ -89,6 +89,24 @@ def preprocess(image_path: str) -> tuple:
     return img, {"is_dark_mode": dark}
 
 
+def preprocess_colour(image_path: str) -> tuple:
+    """
+    Colour-only preprocessing — no binarization.
+
+    Used as a fallback for phone-photo-of-screen images where adaptive
+    thresholding fragments text due to Moiré patterns from the screen
+    pixel grid or uneven backlight reflections.
+
+    Pipeline: load → resize → CLAHE → sharpen  (NO binarise)
+    """
+    img  = load(image_path)
+    dark = is_dark_mode(img)
+    img  = _resize(img)
+    img  = _clahe(img)
+    img  = _sharpen(img)
+    return img, {"is_dark_mode": dark}
+
+
 def _auto_rotate(img: np.ndarray) -> np.ndarray:
     """
     Detect and correct image rotation using dominant line angles (Hough).

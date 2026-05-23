@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from config import OCR_CONFIDENCE_THRESHOLD
-from image_preprocess import preprocess, preprocess_for_stars
+from image_preprocess import preprocess, preprocess_colour, preprocess_for_stars
 
 logger  = logging.getLogger(__name__)
 
@@ -103,6 +103,10 @@ _PAT_OD_00       = re.compile(r"\b00(\d{18})\b")
 # Truncated: "OD3371401480..." — grab what's there then find the rest nearby
 _PAT_OD_TRUNC    = re.compile(r"\b[Oo0][Dd0](\d{10,17})\.{2,}")
 _PAT_TAIL        = re.compile(r"\b(\d{15,18})\b")
+# OD number where OCR inserted spaces inside the digit string
+# e.g. "OD33714786851192 9100" or "OD 337147868511929100"
+# Captures up to 22 chars (18 digits + up to 4 spaces OCR noise)
+_PAT_OD_SPACED   = re.compile(r"[Oo0][Dd]\s{0,2}([\d][\d ]{15,21}[\d])")
 
 _KW = re.compile(
     r"order\s*(number|id|no\.?|#?)"
@@ -149,6 +153,20 @@ def _strategies(corpus: str, near_kw: bool) -> tuple:
     # S2 — Clean OD+18 in raw text
     m = _PAT_OD_RAW.search(corpus)
     if m: return m.group(1).upper(), "HIGH"
+
+    # S2b — OD with internal spaces (OCR breaks long digit strings)
+    # e.g. "OD33714786851192 9100" → "OD337147868511929100"
+    m = _PAT_OD_SPACED.search(corpus)
+    if m:
+        digits = re.sub(r"\s", "", m.group(1))
+        if len(digits) == 18:
+            return f"OD{digits}", "HIGH"
+    # Also try on stitched (catches "OD 337..." where the split is at "OD")
+    m = _PAT_OD_SPACED.search(re.sub(r"\n", " ", corpus))
+    if m:
+        digits = re.sub(r"\s", "", m.group(1))
+        if len(digits) == 18:
+            return f"OD{digits}", "HIGH"
 
     # S3 — "00" prefix (OD misread as 00) — most common failure
     #        Catches: "00337122575350022100" → "OD337122575350022100"
@@ -199,17 +217,55 @@ def _strategies(corpus: str, near_kw: bool) -> tuple:
 
 def _extract_order_id(text: str) -> tuple:
     """Returns (order_id | None, 'HIGH'|'LOW'|None)."""
-    lines    = text.splitlines()
-    kw_lines = []
+    lines = text.splitlines()
+
+    # ── Pre-pass: "Order ID:" on line N, OD value on line N+1/N+2 ────────
+    # Handles Flipkart invoice layout where label and value are on separate
+    # lines.  We scan each non-empty line after the keyword for something
+    # that looks like an OD number (with possible OCR noise).
+    for i, line in enumerate(lines):
+        if not _KW.search(line):
+            continue
+        checked = 0
+        for j in range(i + 1, min(i + 6, len(lines))):
+            candidate = lines[j].strip()
+            if not candidate:
+                continue
+            checked += 1
+            if checked > 3:
+                break
+            # Strip spaces, hyphens, dots that OCR might insert
+            stitched = re.sub(r"[\s\-\.]", "", candidate)
+            # Full-line OD match (exactly OD + 18 digits)
+            m = re.fullmatch(r"[Oo0][Dd](\d{16,20})", stitched)
+            if m:
+                digits = m.group(1)
+                if len(digits) == 18:
+                    return f"OD{digits}", "HIGH"
+                # Off by 1-2 digits — OCR clipping at line edge
+                if 16 <= len(digits) <= 20:
+                    return f"OD{digits[:18]}", "HIGH"
+            # OD prefix may be on the SAME line as "Order ID:" — check
+            # if the candidate is purely digits (prefix already consumed)
+            m = re.fullmatch(r"(\d{17,19})", stitched)
+            if m:
+                digits = m.group(1).zfill(18)
+                return f"OD{digits}", "HIGH"
+
+    # ── Keyword-window strategy pass ──────────────────────────────────────
+    # Collect up to 10 lines after every keyword match; wider than the old
+    # 5-line window to handle invoice tables where OCR interleaves columns.
+    kw_lines: list[str] = []
     for i, line in enumerate(lines):
         if _KW.search(line):
-            kw_lines.extend(lines[i: i + 5])
+            kw_lines.extend(lines[i: i + 10])   # was 5
 
     if kw_lines:
         oid, conf = _strategies("\n".join(kw_lines), near_kw=True)
-        if oid: return oid, conf
+        if oid:
+            return oid, conf
 
-    # Full text — run all strategies except noisy tail rescue
+    # ── Full text — run all strategies except noisy tail rescue ───────────
     return _strategies(text, near_kw=False)
 
 
@@ -723,23 +779,35 @@ def _star_remark(star: float, meta: dict, method: str) -> str:
 # =============================================================
 
 def extract_order_id(image_path: str) -> tuple:
-    """Returns (order_id | None, remark, engine)."""
-    try:
-        img, _ = preprocess(image_path)
-    except Exception as e:
-        return None, f"Image error: {e}", "none"
-    try:
-        text, conf = _run_ocr(img)
-        oid, confidence = _extract_order_id(text)
-        if oid and confidence == "HIGH":
-            return oid, "Extracted by RapidOCR", "rapidocr"
-        if oid and confidence == "LOW":
-            return oid, "Partial match — verify prefix digits", "rapidocr_partial"
-        if conf < OCR_CONFIDENCE_THRESHOLD:
-            return None, f"Low OCR confidence ({conf:.2f})", "rapidocr"
-        return None, "Pattern not matched in text", "rapidocr"
-    except Exception as e:
-        return None, f"OCR error: {e}", "none"
+    """
+    Returns (order_id | None, remark, engine).
+
+    Two-pass OCR for robustness:
+    Pass 1 — binarised image (standard; best for clean screenshots)
+    Pass 2 — colour image, no binarization (fallback for phone-photo-of-screen
+              where adaptive threshold fragments text due to Moiré / glare)
+    """
+    for pass_num, _prep in enumerate((preprocess, preprocess_colour), start=1):
+        try:
+            img, _ = _prep(image_path)
+        except Exception as e:
+            return None, f"Image error: {e}", "none"
+        try:
+            text, conf = _run_ocr(img)
+            oid, confidence = _extract_order_id(text)
+            if oid and confidence == "HIGH":
+                suffix = "" if pass_num == 1 else " (colour pass)"
+                return oid, f"Extracted by RapidOCR{suffix}", "rapidocr"
+            if oid and confidence == "LOW":
+                suffix = "" if pass_num == 1 else " (colour pass)"
+                return oid, f"Partial match — verify prefix digits{suffix}", "rapidocr_partial"
+        except Exception as e:
+            logger.debug("OCR pass %d error: %s", pass_num, e)
+            if pass_num == 1:
+                continue   # try colour pass
+            return None, f"OCR error: {e}", "none"
+
+    return None, "Pattern not matched in text", "rapidocr"
 
 
 def extract_star_rating(image_path: str) -> tuple:
