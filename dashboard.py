@@ -13,6 +13,7 @@
 # =============================================================
 
 import sqlite3, time, re, os
+from difflib import SequenceMatcher
 from pathlib import Path
 import streamlit as st
 import pandas as pd
@@ -232,6 +233,49 @@ def flag_cell(val):
     elif val == "NO":      bg = "#fee2e2"
     else:                  bg = "#f1f5f9"
     return f'<td class="ctr" style="background:{bg}">{badge(val)}</td>'
+
+def diff_oid_html(zoho_raw, file_raw) -> str:
+    """
+    Return HTML for the File Order ID cell.
+
+    When the two normalised IDs differ, every character (or block of
+    characters) in the File Order ID that does NOT match the Zoho Order
+    ID is wrapped in a red highlight so the reviewer can see at a glance
+    exactly which digits are wrong.
+
+    Falls back to plain text whenever one of the values is blank (the
+    Order_ID_Flag will already show 'Un-Verified' in that case).
+    """
+    if _is_blank(file_raw):
+        return safe(file_raw)
+
+    f_norm = normalise_oid(str(file_raw))
+    if not f_norm:
+        return safe(file_raw)
+
+    if _is_blank(zoho_raw):
+        return f_norm                          # nothing to compare against
+
+    z_norm = normalise_oid(str(zoho_raw))
+    if not z_norm or z_norm == f_norm:
+        return f_norm                          # identical — no highlighting
+
+    # Align with SequenceMatcher and mark the differing blocks in f_norm
+    parts = []
+    for tag, _, _, j1, j2 in SequenceMatcher(
+            None, z_norm, f_norm, autojunk=False).get_opcodes():
+        chunk = f_norm[j1:j2]
+        if not chunk:
+            continue                       # skip zero-length opcodes
+        if tag == "equal":
+            parts.append(chunk)
+        else:
+            parts.append(
+                f'<span style="color:#dc2626;font-weight:700;'
+                f'background:#fee2e2;border-radius:3px;padding:0 2px">'
+                f'{chunk}</span>'
+            )
+    return "".join(parts)
 
 def _is_blank(val) -> bool:
     """True for None, NaN (float), or empty/placeholder strings.
@@ -716,7 +760,7 @@ for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
       <td class="mono">{safe(row.get('branch',''))}</td>
       <td class="mono">{safe(row.get('ticket_id',''))}</td>
       <td class="mono">{safe(row.get('Zoho_order_ID',''))}</td>
-      <td class="mono">{safe(row.get('file_order_id',''))}</td>
+      <td class="mono">{diff_oid_html(row.get('Zoho_order_ID',''), row.get('file_order_id',''))}</td>
       {_pend_cell if _pending else flag_cell(row['Order_ID_Flag'])}
       <td class="ctr">{safe('') if _pending else star_html(row.get('service_rating',''))}</td>
       <td class="ctr">{safe('') if _pending else star_html(row.get('product_rating',''))}</td>
