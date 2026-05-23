@@ -335,11 +335,7 @@ def diff_oid_html(zoho_raw, file_raw) -> str:
     parts: list[str] = []
     for i, ch in enumerate(display):
         if i in disp_to_sig and disp_to_sig[i] in differ:
-            parts.append(
-                f'<span style="color:#dc2626;font-weight:700;'
-                f'background:#fee2e2;border-radius:3px;padding:0 2px">'
-                f'{ch}</span>'
-            )
+            parts.append(f'<span style="color:#dc2626;font-weight:700">{ch}</span>')
         else:
             parts.append(ch)
     return "".join(parts)
