@@ -19,7 +19,7 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(
-    page_title="Zoho Forms Analysis",
+    page_title="Customer Review Analysis",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -528,21 +528,13 @@ _badge = ("⚡ Pipeline active — processing in progress"
 #  TOP BAR
 # =============================================================
 
-st.markdown(f"""
+st.markdown("""
 <div class="topbar">
   <div style="display:flex;align-items:center;gap:16px">
     <span style="font-size:42px">🔍</span>
     <div>
-      <div class="topbar-title">Zoho Forms Analysis</div>
-      <div class="topbar-sub">OCR · Image Processing · Order ID &amp; Star Rating Audit</div>
-      <div class="topbar-badge">{_badge}</div>
+      <div class="topbar-title">CUSTOMER REVIEW ANALYSIS</div>
     </div>
-  </div>
-  <div class="topbar-time">
-    <div class="topbar-tval">{_data_sync_str}</div>
-    <div>Data last synced</div>
-    <div style="margin-top:8px;font-size:13px;color:#93c5fd">{_data_src_chip}</div>
-    <div style="margin-top:6px;font-size:12px;color:#7fa8d4">Page loaded {now_str}</div>
   </div>
 </div>""", unsafe_allow_html=True)
 
