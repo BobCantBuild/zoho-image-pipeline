@@ -16,6 +16,7 @@
 import sqlite3
 import csv
 import os
+import re
 from pathlib import Path
 
 from config import DB_PATH as CONFIG_DB_PATH
@@ -26,6 +27,19 @@ CSV_PATH = os.environ.get("ZOHOPIPE_ZOHO_CSV_PATH") or str(CONFIG_CSV_PATH)
 DB_PATH = os.environ.get("ZOHOPIPE_DB_PATH") or str(CONFIG_DB_PATH)
 # ──────────────────────────────────────────────────────────────
 
+# Excel silently converts long numeric IDs (folder ids, Amazon order ids) into
+# scientific notation when the CSV is opened+saved — e.g. "246572000000016066"
+# becomes "2.47E+17" and "40227996110609900" becomes "4.02E+16". That destroys
+# the join key and any numeric Order ID. Detect it so we can recover/skip.
+_SCI_RE = re.compile(r"^\s*[-+]?\d(?:\.\d+)?[eE][-+]?\d+\s*$")
+# A folder / record id is a long run of digits (zoho ids are 18 digits).
+_ID_FROM_PATH_RE = re.compile(r"['\"`\s]*(\d{8,})[\\/]")
+
+
+def looks_sci_corrupt(raw: str) -> bool:
+    """True if Excel mangled a long number into scientific notation ('2.47E+17')."""
+    return bool(_SCI_RE.match(raw or ""))
+
 
 def clean_filename(raw: str) -> str:
     """
@@ -35,6 +49,39 @@ def clean_filename(raw: str) -> str:
     if not raw:
         return ""
     return raw.strip().lstrip("'\"` ").strip()
+
+
+def recover_id_from_paths(*path_values: str) -> str:
+    """
+    Recover the real folder / record id from an image-path cell.
+
+    The path columns survive Excel corruption because they are text, e.g.
+    "246572000000016066/ImageUpload/WhatsApp_Image_....jpeg"
+    The leading digits before the first slash are the folder id.
+    """
+    for val in path_values:
+        m = _ID_FROM_PATH_RE.match(val or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
+def clean_order_id(raw: str) -> tuple[str, bool]:
+    """
+    Return (order_id, was_corrupt).
+
+    Excel turns long numeric order ids (e.g. Amazon "40227996110609900") into
+    scientific notation ("4.02E+16") which is unrecoverable. We return an empty
+    string for those so the dashboard shows "Un-Verified" rather than a false
+    "NO" from comparing against garbage. OD-prefixed Flipkart ids are text and
+    survive intact.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "", False
+    if looks_sci_corrupt(s):
+        return "", True
+    return s, False
 
 
 def add_columns_if_missing(conn: sqlite3.Connection):
@@ -84,9 +131,10 @@ def read_csv(csv_path: str) -> list:
 
 def find_columns(rows: list) -> tuple:
     """
-    Find the actual column names for File name, Ticket ID, Order ID, Added Time, Branch.
+    Find the actual column names for File name, Ticket ID, Order ID, Added Time,
+    Branch, and the two image-path columns (used to recover a corrupted File name).
     Case-insensitive, handles slight name variations.
-    Returns (file_col, ticket_col, order_col, added_time_col, branch_col).
+    Returns (file_col, ticket_col, order_col, added_time_col, branch_col, path_cols).
     """
     if not rows:
         raise ValueError("CSV is empty")
@@ -107,6 +155,11 @@ def find_columns(rows: list) -> tuple:
     added_col  = find(["added time", "added_time", "date of posting", "date_of_posting", "posting date"])
     branch_col = find(["branch"])
 
+    # Image-path columns ("Please upload a clear picture of the order screen…").
+    # These keep the real folder id even when Excel mangles the File name column.
+    path_cols = [h for h in headers
+                 if any(k in h.lower() for k in ("upload", "picture", "screen"))]
+
     missing = []
     if not file_col:   missing.append("'File name'")
     if not ticket_col: missing.append("'Ticket ID'")
@@ -121,16 +174,18 @@ def find_columns(rows: list) -> tuple:
             f"  Check the CSV column names and update find() keywords if needed.\n"
         )
 
-    print(f"  [CSV] Mapped  →  file='{file_col}'  "
+    print(f"  [CSV] Mapped  ->  file='{file_col}'  "
           f"ticket='{ticket_col}'  order='{order_col}'  "
           f"added='{added_col}'  branch='{branch_col}'")
-    return file_col, ticket_col, order_col, added_col, branch_col
+    if path_cols:
+        print(f"  [CSV] Path columns for id-recovery: {path_cols}")
+    return file_col, ticket_col, order_col, added_col, branch_col, path_cols
 
 
 def run(csv_path: str | None = None, db_path: str | None = None):
     print()
     print("=" * 60)
-    print("  CSV → SQLite Merge")
+    print("  CSV -> SQLite Merge")
     print("=" * 60)
 
     # ── 1. Read CSV ────────────────────────────────────────────
@@ -138,15 +193,30 @@ def run(csv_path: str | None = None, db_path: str | None = None):
     db_path = db_path or DB_PATH
 
     rows = read_csv(csv_path)
-    file_col, ticket_col, order_col, added_col, branch_col = find_columns(rows)
+    file_col, ticket_col, order_col, added_col, branch_col, path_cols = find_columns(rows)
 
-    # Build lookup dict:  clean_filename → {ticket_id, csv_order_id, added_time, branch}
+    # Build lookup dict:  file_name → {ticket_id, csv_order_id, added_time, branch}
     lookup = {}
     skipped = 0
+    recovered = 0        # File name recovered from image path (Excel corruption)
+    corrupt_orders = 0   # Order IDs lost to scientific notation
     for row in rows:
-        fname   = clean_filename(row.get(file_col, ""))
+        raw_fname = row.get(file_col, "")
+        fname     = clean_filename(raw_fname)
+
+        # The File name column is frequently destroyed by Excel (long numeric id
+        # → "2.47E+17"). When it isn't a clean numeric id, recover the real
+        # folder id from the image-path columns, which keep it intact.
+        if not fname.isdigit():
+            rec = recover_id_from_paths(*(row.get(pc, "") for pc in path_cols))
+            if rec:
+                fname = rec
+                recovered += 1
+
         ticket  = (row.get(ticket_col) or "").strip()
-        orderid = (row.get(order_col)  or "").strip()
+        orderid, was_corrupt = clean_order_id(row.get(order_col, ""))
+        if was_corrupt:
+            corrupt_orders += 1
         added   = (row.get(added_col)  or "").strip()
         branch  = (row.get(branch_col) or "").strip()
         if not fname:
@@ -160,6 +230,12 @@ def run(csv_path: str | None = None, db_path: str | None = None):
         }
 
     print(f"  [CSV] Valid file name rows : {len(lookup)}")
+    if recovered:
+        print(f"  [CSV] File names recovered from image path (Excel corruption): {recovered}")
+    if corrupt_orders:
+        print(f"  [CSV] WARNING: Order IDs lost to Excel scientific-notation: {corrupt_orders}")
+        print( "        -> stored blank (shown as 'Un-Verified'). To fix, re-export the")
+        print( "           CSV from Zoho Forms WITHOUT opening/saving it in Excel.")
     if skipped:
         print(f"  [CSV] Rows skipped (empty file name): {skipped}")
 
@@ -245,7 +321,7 @@ def run(csv_path: str | None = None, db_path: str | None = None):
     print(f"  In CSV, not in DB  : {not_found}")
     print(f"  Database           : {db_path}")
     print()
-    print("  Open DB Browser → Browse Data → select 'zoho_view'")
+    print("  Open DB Browser -> Browse Data -> select 'zoho_view'")
     print("  to see sno | Ticket ID | Order ID | file_name | ...")
     print("=" * 60)
 

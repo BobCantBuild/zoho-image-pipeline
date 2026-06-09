@@ -1,0 +1,2 @@
+[console_scripts]
+zoho-app = streamlit_app:main

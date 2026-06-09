@@ -3,14 +3,14 @@
 # =============================================================
 
 # ── PATHS ─────────────────────────────────────────────────────
-BASE_DIR   = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\Final\15_05_2026\Final"
+BASE_DIR   = r"C:\myfiles\IFB\Project\IT\zoho-image-pipeline\Final"
 DB_PATH    = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
 LOG_FILE   = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\pipeline.log"
 EXPORT_DIR = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\exports"
 
 # â”€â”€ ZOHO CSV (Ticket ID + Order ID) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Used by merge_csv.py to populate `ticket_id` and `csv_order_id` into the DB.
-ZOHO_CSV_PATH = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\Final\15_05_2026\CustomerReviewSubmissionFormforSAs_Records_1.csv"
+ZOHO_CSV_PATH = r"C:\myfiles\IFB\Project\IT\zoho-image-pipeline\CustomerReviewSubmissionFormforSAs_Records_1_1.csv"
 
 # ── SUBFOLDER NAMES ───────────────────────────────────────────
 IMAGE_FOLDER_1 = "ImageUpload"    # Image1 → order screenshot

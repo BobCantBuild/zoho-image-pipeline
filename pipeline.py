@@ -144,9 +144,17 @@ def process_record(rec: dict, debug: bool = False) -> dict:
     # ── Route star count into the correct category field ─────
     # Exactly one of service_rating / product_rating / file_star
     # will be set; the others stay None.
+    #   "Installation and Demo" screen  → service_rating
+    #   "Rate your experience"  screen  → product_rating
+    #   neither phrase detected         → file_star (general)
     service_rating = product_rating = file_star_val = None
     if star is not None:
         category = classify_star_category(star_img_text)
+        if category == "general":
+            # The category label may have OCR'd more cleanly on the OTHER
+            # screenshot — retry against the combined text of both images.
+            combined = f"{out.get('raw_ocr_image1') or ''}\n{out.get('raw_ocr_image2') or ''}"
+            category = classify_star_category(combined)
         if category == "service":
             service_rating = star
         elif category == "product":

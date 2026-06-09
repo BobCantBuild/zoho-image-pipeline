@@ -350,6 +350,17 @@ def _is_blank(val) -> bool:
     return str(val).strip() in ("", "None", "nan", "NaN", "—")
 
 
+_SCI_RE = re.compile(r"^\s*[-+]?\d(?:\.\d+)?[eE][-+]?\d+\s*$")
+
+def _is_sci_corrupt(val) -> bool:
+    """True if Excel mangled a long numeric Order ID into scientific notation
+    ('4.02E+16'). Such values are unrecoverable garbage, so the dashboard must
+    treat them as missing (→ Un-Verified) rather than a false NO."""
+    if _is_blank(val):
+        return False
+    return bool(_SCI_RE.match(str(val)))
+
+
 def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
     """Add Order_ID_Flag, file_star_flag, Flag columns."""
     df["Zoho_order_ID"] = df.get("Zoho_order_ID",
@@ -364,7 +375,11 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
         if not f_dig or f_dig == "0":
             return "Un-Verified"
 
-        z_dig = _oid_digits(r.get("Zoho_order_ID", ""))
+        raw_z = r.get("Zoho_order_ID", "")
+        if _is_sci_corrupt(raw_z):
+            return "Un-Verified"   # Excel destroyed the Zoho Order ID — can't compare
+
+        z_dig = _oid_digits(raw_z)
         if not z_dig or z_dig == "0":
             return "Un-Verified"   # Zoho Order ID missing
 

@@ -697,42 +697,54 @@ def _position_of_colored_star(colored_x: float, all_slots: list[float]) -> int:
     return 0   # unknown
 
 
+# Token-based classification. Whole-phrase fuzzy matching is unreliable here
+# because a common word inflates the score: "installation & demo" despaced is
+# "installationdemo", which an Amazon invoice line "...installation service..."
+# matches at 0.75 even though it has no "demo". So instead we require EACH
+# discriminating token to be independently present (with OCR tolerance):
+#   service  ⇐ "installation" AND "demo"   (demo also lives inside "demonstration")
+#   product  ⇐ "experience"                (the rare, defining word on that screen)
+# "rate"/"installation" alone are too common (Amazon shows "Rate Seller",
+# "Installation Service"), so neither can classify on its own.
+_SERVICE_TOKENS = ("installation", "demo")
+_PRODUCT_TOKENS = ("experience",)
+
+
+def _token_present(token: str, words: list[str], flat: str) -> bool:
+    """
+    True if `token` appears in the OCR text, tolerating character errors.
+
+      • substring of the despaced text  — catches merged OCR ("rateyourexperience")
+        and stems ("demo" inside "demonstration")
+      • fuzzy match against any single whitespace word — catches char swaps like
+        "instailation" → "installation"
+    Short tokens use a slightly higher word-fuzz bar to avoid chance hits.
+    """
+    from difflib import SequenceMatcher
+    if token in flat:
+        return True
+    threshold = 0.80 if len(token) >= 6 else 0.78
+    return any(SequenceMatcher(None, token, w).ratio() >= threshold for w in words)
+
+
 def classify_star_category(text: str) -> str:
     """
     Examine the raw OCR text from the star-rating image and return which
-    rating category the star count belongs to:
+    rating category the detected star count belongs to:
 
       "service"  — screen shows "Installation and Demo" (or similar)
       "product"  — screen shows "Rate your experience" (or similar)
-      "general"  — neither keyword detected (default / unknown)
+      "general"  — neither phrase detected (default / unknown)
 
-    Fuzzy matching tolerates minor OCR typos / spacing errors.
-    Uses a sliding-window SequenceMatcher so partial-line matches work.
+    Robust to the messy OCR these phone-photo / screenshot images produce.
     """
-    from difflib import SequenceMatcher
+    norm  = " ".join((text or "").lower().split())   # collapsed whitespace
+    words = norm.split()
+    flat  = re.sub(r"[^a-z0-9]", "", norm)           # every separator removed
 
-    # Normalise: collapse whitespace, lowercase
-    tl = " ".join(text.lower().split())
-
-    def _fuzzy_in(phrase: str, threshold: float = 0.72) -> bool:
-        pl = phrase.lower()
-        if pl in tl:
-            return True
-        plen = len(pl)
-        if plen == 0:
-            return False
-        # Slide a window the same length as the phrase across the text.
-        # max(1, …) ensures we always do at least one comparison even
-        # when the text is shorter than the phrase.
-        for i in range(max(1, len(tl) - plen + 1)):
-            seg = tl[i: i + plen]   # Python slicing handles OOB gracefully
-            if SequenceMatcher(None, pl, seg).ratio() >= threshold:
-                return True
-        return False
-
-    if _fuzzy_in("installation and demo"):
+    if all(_token_present(t, words, flat) for t in _SERVICE_TOKENS):
         return "service"
-    if _fuzzy_in("rate your experience"):
+    if all(_token_present(t, words, flat) for t in _PRODUCT_TOKENS):
         return "product"
     return "general"
 

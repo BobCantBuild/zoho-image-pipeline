@@ -1,6 +1,6 @@
 # CLAUDE.md — Project Memory: Zoho Image Pipeline
 
-> Last updated: 2026-05-22 (session 3)
+> Last updated: 2026-06-09 (session 4)
 > This file is the authoritative memory for Claude across all sessions.
 > Read this first before touching any file.
 
@@ -69,7 +69,9 @@ file_name              TEXT NOT NULL UNIQUE   -- folder name = record key
 image1_path            TEXT
 image2_path            TEXT
 file_order_id          TEXT          -- OCR-extracted order ID
-file_star              REAL          -- OCR-extracted star rating
+service_rating         REAL          -- star when screen shows "Installation and Demo"
+product_rating         REAL          -- star when screen shows "Rate your experience"
+file_star              REAL          -- star when neither phrase detected (general)
 remarks_file_order_id  TEXT
 remarks_file_star      TEXT
 flag                   TEXT          -- PENDING | OK | NO_ORDER_ID | NO_STAR | ERROR | ...
@@ -233,6 +235,10 @@ calls `git push origin <branch>` explicitly. **Never use bare `git push`** — t
 | Flipkart category rows inflate star count | Strategy A picked highest blob-count row → category rows with 4+ blobs beat real 3-star | Strategy A now picks TOPMOST multi-star row (not highest count) |
 | Flipkart Order Details green stars not detected | Green stars are muted (low saturation) — outside old `mask_g` HSV range | Added `mask_g_muted` band `[38,30,50]–[90,160,200]` with lighter sat/val gate |
 | Star detection fails entirely on edge-case images | Color + shape pipeline returns None with no fallback | Added OCR label fallback in `extract_star_rating()`: reads "Terrible/Bad/Okay/Good/Great" from OCR text → maps to 1–5 |
+| Date/Branch/Ticket/Zoho Order ID all blank in UI | **Excel corruption.** Opening+saving the Zoho CSV in Excel turns the long-numeric `File name` join key into scientific notation (`246572000000016066` → `2.47E+17`) for *every* row, so `merge_csv` matched 0 records | `merge_csv.recover_id_from_paths()` recovers the real folder id from the image-path columns (which stay text). Match rate went 0/10 → 10/10 |
+| Some Zoho Order IDs show `✕ NO` falsely | Excel also mangles purely-numeric order IDs (Amazon `40227996110609900` → `4.02E+16`) — ~16% of rows. Unrecoverable from this CSV | `merge_csv.clean_order_id()` stores corrupted ones as blank; dashboard `_is_sci_corrupt()` guard treats sci-notation as Un-Verified, not NO. **Real fix: re-export from Zoho without opening in Excel** |
+| Star routed to wrong category (service vs product) | `classify_star_category` fuzzy-matched the *whole* phrase; a common word inflated the score (`"installation & demo"` despaced = `installationdemo` matched an Amazon invoice's "installation service" at 0.75) | Rewrote to **token-based AND matching**: service needs `installation` AND `demo`; product needs `experience`. Each token matched with substring + per-word fuzzy (OCR-tolerant) |
+| `uv run streamlit` fails to build the package | `pyproject.toml` required `setuptools_scm` (no config section) and setuptools flat-layout auto-discovered `data/` + `Final/` as packages | Removed `setuptools_scm` from build-requires; added `[tool.setuptools] packages = []` (this is an app, not an importable package) |
 
 ---
 
@@ -265,6 +271,17 @@ OCR → _star_from_label() reads Terrible/Bad/Okay/Good/Great → 1-5
 | `_position_of_colored_star(x, slots)` | Map colored blob x to nearest slot in 1-5 grid |
 | `_star_from_label(text)` | OCR text → rating label → int (OCR fallback) |
 | `_auto_rotate(img)` | Correct ±90° rotation using Hough dominant-line angle |
+| `classify_star_category(text)` | Routes the star into service/product/general. **Token-based**: service ⇐ `installation`+`demo`, product ⇐ `experience` (each OCR-tolerant via substring + per-word fuzzy). `pipeline.py` retries with combined img1+img2 text when a single image yields "general" |
+
+### Star → category routing (which of the 3 columns gets the value)
+Exactly one of `service_rating` / `product_rating` / `file_star` is set per record:
+- "Installation and Demo" screen → `service_rating`
+- "Rate your experience" screen → `product_rating`
+- neither phrase detected → `file_star` (general)
+
+Dashboard `star_flag` checks them in order service → product → file_star (first populated wins).
+**Do not** revert `classify_star_category` to whole-phrase fuzzy matching — a dominant common
+word (`installation`) inflates the score and mis-routes (see bug table).
 
 ### HSV colour ranges (image_preprocess.py)
 | Mask | HSV range | Covers |
