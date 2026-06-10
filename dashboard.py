@@ -414,9 +414,20 @@ def compute_flags(df: pd.DataFrame) -> pd.DataFrame:
             return "NO"
         return "Un-Verified"   # Either or both are Un-Verified, none is NO
 
-    df["Order_ID_Flag"]  = df.apply(order_flag,     axis=1)
-    df["file_star_flag"] = df.apply(star_flag,       axis=1)
-    df["Flag"]           = df.apply(verified_flag,   axis=1)
+    def rating_ge4_flag(col):
+        def _flag(r):
+            val = r.get(col, None)
+            if _is_blank(val):
+                return "Un-Verified"
+            try:    return "YES" if float(val) >= 4 else "NO"
+            except: return "Un-Verified"
+        return _flag
+
+    df["Order_ID_Flag"]      = df.apply(order_flag,     axis=1)
+    df["file_star_flag"]     = df.apply(star_flag,       axis=1)
+    df["service_rating_flag"] = df.apply(rating_ge4_flag("service_rating"), axis=1)
+    df["product_rating_flag"] = df.apply(rating_ge4_flag("product_rating"), axis=1)
+    df["Flag"]                = df.apply(verified_flag,   axis=1)
     return df
 
 
@@ -801,12 +812,12 @@ st.session_state["_total_pages"] = total_pages   # used by _next_page callback
 exp_cols = ["sno","date_of_posting_str","branch","ticket_id","Zoho_order_ID",
             "file_order_id","Order_ID_Flag",
             "service_rating","product_rating","file_star",
-            "file_star_flag","file_name","Flag"]
+            "service_rating_flag","product_rating_flag","file_name","Flag"]
 exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
 exp_df.columns = ["#","Date of Posting","Branch","Ticket ID","Zoho Order ID",
                   "File Order ID","Order ID Match",
                   "Service Rating","Product Rating","Star Rating",
-                  "Star ≥ 4","File Name","Verified"][: len(exp_df.columns)]
+                  "SERVICE RATING >=4","PRODUCT RATING >=4","File Name","Verified"][: len(exp_df.columns)]
 with export_slot:
     st.download_button("⬇️ Export to CSV",
                        data=exp_df.to_csv(index=False).encode("utf-8-sig"),
@@ -849,7 +860,8 @@ for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
       <td class="ctr">{safe('') if _pending else star_html(row.get('service_rating',''))}</td>
       <td class="ctr">{safe('') if _pending else star_html(row.get('product_rating',''))}</td>
       <td class="ctr">{safe('') if _pending else star_html(row.get('file_star',''))}</td>
-      {_pend_cell if _pending else flag_cell(row['file_star_flag'])}
+      {_pend_cell if _pending else flag_cell(row['service_rating_flag'])}
+      {_pend_cell if _pending else flag_cell(row['product_rating_flag'])}
       <td class="mono" style="color:#64748b;font-size:13px">{safe(row.get('file_name',''))}</td>
       {_pend_cell if _pending else flag_cell(row['Flag'])}
     </tr>"""
@@ -869,7 +881,8 @@ st.markdown(f"""
       <th style="text-align:center">Service Rating</th>
       <th style="text-align:center">Product Rating</th>
       <th style="text-align:center">Star Rating</th>
-      <th style="text-align:center">Star ≥ 4</th>
+      <th style="text-align:center">SERVICE RATING &gt;=4</th>
+      <th style="text-align:center">PRODUCT RATING &gt;=4</th>
       <th>File Name</th>
       <th style="text-align:center">✦ Verified</th>
     </tr></thead>
