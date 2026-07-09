@@ -26,8 +26,8 @@ st.set_page_config(
 )
 
 # ── Paths ─────────────────────────────────────────────────────
-# Check if on cloud (file doesn't exist), use CSV
-DB_PATH  = Path(r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db") if os.name == 'nt' else Path("zoho_pipeline.db")
+from config import DB_PATH as _CONFIG_DB_PATH
+DB_PATH  = Path(_CONFIG_DB_PATH)   # data/zoho_pipeline.db (set by config.py)
 CSV_PATH = Path(__file__).parent / "data" / "zoho_latest.csv"
 
 # =============================================================
@@ -465,8 +465,9 @@ def load_data(db_mtime: float, csv_mtime: float) -> tuple:
                        COALESCE(product_rating, NULL) AS product_rating,
                        file_star, file_name,
                        flag AS pipeline_flag,
-                       remarks_file_order_id, remarks_file_star
-                FROM zoho_records ORDER BY sno
+                       remarks_file_order_id, remarks_file_star,
+                       sheet_row
+                FROM zoho_records ORDER BY COALESCE(sheet_row, sno)
             """, conn)
 
             q = lambda s: conn.execute(s).fetchone()[0]
@@ -588,13 +589,8 @@ else:
     star_yes = star_no = star_unv = 0
     v_yes = v_no = v_unv = 0
 
-# ── Folder count (filesystem or fallback to DB total) ─────────
-try:
-    from config import BASE_DIR as _BD
-    _bp = Path(str(_BD))
-    folder_count = sum(1 for e in _bp.iterdir() if e.is_dir()) if _bp.exists() else stats.get("total", 0)
-except Exception:
-    folder_count = stats.get("total", 0)
+# Row count comes from DB (sheet source — no local image folders)
+folder_count = stats.get("total", 0)
 
 _pend = stats.get("pending", 0)
 _done = folder_count - _pend

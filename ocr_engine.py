@@ -702,12 +702,19 @@ def _position_of_colored_star(colored_x: float, all_slots: list[float]) -> int:
 # "installationdemo", which an Amazon invoice line "...installation service..."
 # matches at 0.75 even though it has no "demo". So instead we require EACH
 # discriminating token to be independently present (with OCR tolerance):
-#   service  ⇐ "installation" AND "demo"   (demo also lives inside "demonstration")
-#   product  ⇐ "experience"                (the rare, defining word on that screen)
+#   service  ⇐ "installation" AND "demo"   (keyword: "Installation and Demo";
+#              demo also lives inside "demonstration")
+#   product  ⇐ "experience" AND one of "rate"/"share"/"your"
+#              (keywords: "Rate your experience" / "Share your experience")
 # "rate"/"installation" alone are too common (Amazon shows "Rate Seller",
 # "Installation Service"), so neither can classify on its own.
-_SERVICE_TOKENS = ("installation", "demo")
-_PRODUCT_TOKENS = ("experience",)
+_SERVICE_TOKENS    = ("installation", "demo")
+# Product: must match "Rate your experience" OR "Share your experience" as a full phrase.
+# Each tuple = all tokens that must be present together.
+_PRODUCT_PHRASES   = [
+    ("rate",  "your", "experience"),   # "Rate your experience"
+    ("share", "your", "experience"),   # "Share your experience"
+]
 
 
 def _token_present(token: str, words: list[str], flat: str) -> bool:
@@ -732,8 +739,8 @@ def classify_star_category(text: str) -> str:
     Examine the raw OCR text from the star-rating image and return which
     rating category the detected star count belongs to:
 
-      "service"  — screen shows "Installation and Demo" (or similar)
-      "product"  — screen shows "Rate your experience" (or similar)
+      "service"  — screen shows "Installation and Demo"
+      "product"  — screen shows "Rate your experience" or "Share your experience"
       "general"  — neither phrase detected (default / unknown)
 
     Robust to the messy OCR these phone-photo / screenshot images produce.
@@ -744,7 +751,8 @@ def classify_star_category(text: str) -> str:
 
     if all(_token_present(t, words, flat) for t in _SERVICE_TOKENS):
         return "service"
-    if all(_token_present(t, words, flat) for t in _PRODUCT_TOKENS):
+    if any(all(_token_present(t, words, flat) for t in phrase)
+           for phrase in _PRODUCT_PHRASES):
         return "product"
     return "general"
 

@@ -1,20 +1,37 @@
 # =============================================================
 #  config.py  —  ALL settings live here. Only edit this file.
 # =============================================================
+from pathlib import Path
 
-# ── PATHS ─────────────────────────────────────────────────────
-BASE_DIR   = r"C:\myfiles\IFB\Project\IT\zoho-image-pipeline\Final"
-DB_PATH    = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\zoho_pipeline.db"
-LOG_FILE   = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\pipeline.log"
-EXPORT_DIR = r"C:\myfiles\IFB\Project\IT\Zoho-Forms\exports"
+_REPO = Path(__file__).resolve().parent
+_LOCAL_DATA = _REPO / "data"
+_LOCAL_DATA.mkdir(exist_ok=True)
 
-# â”€â”€ ZOHO CSV (Ticket ID + Order ID) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# Used by merge_csv.py to populate `ticket_id` and `csv_order_id` into the DB.
-ZOHO_CSV_PATH = r"C:\myfiles\IFB\Project\IT\zoho-image-pipeline\CustomerReviewSubmissionFormforSAs_Records_1_1.csv"
+# ── DATA SOURCE (Google Sheet) ────────────────────────────────
+# The pipeline reads every record from this sheet: metadata (Added Time,
+# Branch, Ticket ID, Order ID) and the two image URLs (Drive links).
+SHEET_ID      = "1vxmplqaecTL3K9h-G2awk5jZpdCGecZPHWPA7fm4RZk"
+SHEET_GID     = "0"
+SHEET_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={SHEET_GID}"
 
-# ── SUBFOLDER NAMES ───────────────────────────────────────────
-IMAGE_FOLDER_1 = "ImageUpload"    # Image1 → order screenshot
-IMAGE_FOLDER_2 = "ImageUpload1"   # Image2 → review / star screenshot
+# ── PATHS (all inside the repo) ───────────────────────────────
+BASE_DIR        = str(_REPO / "Final")           # legacy folder-scan (unused with sheet source)
+IMAGE_CACHE_DIR = str(_LOCAL_DATA / "images")    # Drive images: <ticket_id>/image1.jpg, image2.jpg
+DB_PATH         = str(_LOCAL_DATA / "zoho_pipeline.db")
+LOG_FILE        = str(_LOCAL_DATA / "pipeline.log")
+EXPORT_DIR      = str(_LOCAL_DATA / "exports")
+Path(IMAGE_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+Path(EXPORT_DIR).mkdir(parents=True, exist_ok=True)
+
+# ── LEGACY (kept so merge_csv.py still imports cleanly) ───────
+ZOHO_CSV_PATH = str(_REPO / "CustomerReviewSubmissionFormforSAs_Records_1_1.csv")
+
+# ── SUBFOLDER NAMES (legacy folder scan — unused) ─────────────
+IMAGE_FOLDER_1 = "ImageUpload"
+IMAGE_FOLDER_2 = "ImageUpload1"
+
+# ── API ───────────────────────────────────────────────────────
+API_POLL_SECONDS = 60   # background sheet-poll interval for api.py
 
 # ── PROCESSING ────────────────────────────────────────────────
 MAX_FOLDERS = None   # None = all folders. Set e.g. 10 for testing.

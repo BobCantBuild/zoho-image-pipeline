@@ -10,15 +10,18 @@
 
 import sys, time, logging, argparse, sqlite3, threading
 from pathlib import Path
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from config import (
     BASE_DIR, DB_PATH, LOG_FILE, LOG_LEVEL,
-    IMAGE_FOLDER_1, IMAGE_FOLDER_2, OCR_WORKERS
+    IMAGE_FOLDER_1, IMAGE_FOLDER_2, OCR_WORKERS, IMAGE_CACHE_DIR
 )
 from db       import init_db, upsert_record, fetch_ok_names, get_stats
 from ocr_engine import extract_order_id, extract_star_rating, get_raw_ocr, classify_star_category
+from sheet_source import fetch_rows, ensure_row_images
+from flags import compute_flags
 
 # ── Logging → file only; terminal output via print() ──────────
 logging.basicConfig(
@@ -34,36 +37,32 @@ CY="\033[96m"; BD="\033[1m"
 
 
 # =============================================================
-#  FOLDER SCANNER
+#  SHEET SCANNER  (Google Sheet → rows + Drive image downloads)
 # =============================================================
 
-def _find_image(folder: Path) -> Optional[str]:
-    if not folder.exists():
-        return None
-    for ext in ("*.jpg","*.jpeg","*.JPG","*.JPEG","*.png","*.PNG","*.webp"):
-        hits = list(folder.glob(ext))
-        if hits:
-            return str(hits[0])
-    return None
+def scan_sheet(limit: Optional[int]) -> list:
+    """Pull the Google Sheet and return records with image URLs only.
+    Images are downloaded later inside process_record() in parallel —
+    NOT here — so this function returns instantly and all PENDING stubs
+    can be written before any slow network work starts."""
+    print(f"  {CY}Fetching sheet…{R}")
+    rows = fetch_rows()
+    print(f"  Sheet rows: {len(rows):,}")
+    if limit:
+        rows = rows[:limit]
 
-
-def scan_folders(limit: Optional[int]) -> list:
-    base = Path(BASE_DIR)
-    if not base.exists():
-        print(f"\n{RD}  ERROR: BASE_DIR not found:{R}\n  {BASE_DIR}\n")
-        sys.exit(1)
-    records = []
-    for entry in sorted(base.iterdir()):
-        if not entry.is_dir():
-            continue
-        records.append({
-            "file_name":   entry.name,
-            "image1_path": _find_image(entry / IMAGE_FOLDER_1),
-            "image2_path": _find_image(entry / IMAGE_FOLDER_2),
-        })
-        if limit and len(records) >= limit:
-            break
-    return records
+    return [{
+        "file_name":    row["ticket_id"],
+        "ticket_id":    row["ticket_id"],
+        "csv_order_id": row["order_id"],
+        "added_time":   row["added_time"],
+        "branch":       row["branch"],
+        "image1_url":   row.get("image1_url", ""),
+        "image2_url":   row.get("image2_url", ""),
+        "image1_path":  None,
+        "image2_path":  None,
+        "sheet_row":    i + 1,   # 1-based row number from the sheet
+    } for i, row in enumerate(rows)]
 
 
 # =============================================================
@@ -72,8 +71,12 @@ def scan_folders(limit: Optional[int]) -> list:
 
 def process_record(rec: dict, debug: bool = False) -> dict:
     fname = rec["file_name"]
-    img1  = rec.get("image1_path")
-    img2  = rec.get("image2_path")
+
+    # Download images now (parallel workers handle this concurrently)
+    img1 = rec.get("image1_path")
+    img2 = rec.get("image2_path")
+    if not img1 or not img2:
+        img1, img2 = ensure_row_images(rec, IMAGE_CACHE_DIR)
 
     out = dict(
         file_name             = fname,
@@ -121,9 +124,12 @@ def process_record(rec: dict, debug: bool = False) -> dict:
 
     out.update(file_order_id=oid, remarks_file_order_id=rem_o, ocr_engine_order=eng_o)
 
-    # ── STAR RATING ──────────────────────────────────────────
+    # ── STAR RATING — Image 2 ONLY ────────────────────────────
+    # Image 1 is the ORDER screenshot: it often contains unrelated star
+    # graphics (seller ratings, "rate this product" widgets), which give
+    # false counts. Never fall back to it for stars.
     star = rem_s = eng_s = None
-    star_img_text = ""      # OCR text of the image that yielded the star count
+    star_img_text = ""      # OCR text of the rating screenshot
 
     if img2:
         if out["raw_ocr_image2"] is None:
@@ -131,30 +137,21 @@ def process_record(rec: dict, debug: bool = False) -> dict:
         star_img_text = out["raw_ocr_image2"] or ""
         star, rem_s, eng_s = extract_star_rating(img2)
 
-    if star is None and img1:
-        star, rem_s, eng_s = extract_star_rating(img1)
-        if star is not None:
-            star_img_text = out.get("raw_ocr_image1") or ""
-            rem_s = "Stars found in Image1"
-
     if star is None:
-        rem_s = "Stars not found in files"
+        rem_s = "Stars not found in Image2"
         flags.append("NO_STAR")
 
     # ── Route star count into the correct category field ─────
     # Exactly one of service_rating / product_rating / file_star
     # will be set; the others stay None.
-    #   "Installation and Demo" screen  → service_rating
-    #   "Rate your experience"  screen  → product_rating
-    #   neither phrase detected         → file_star (general)
+    #   "Installation and Demo" screen                       → service_rating
+    #   "Rate your experience" / "Share your experience"     → product_rating
+    #   neither phrase detected                              → file_star (general)
+    # Keywords are matched against Image 2's text only — Image 1 (order
+    # page) can contain phrases like "share your experience" and mis-route.
     service_rating = product_rating = file_star_val = None
     if star is not None:
         category = classify_star_category(star_img_text)
-        if category == "general":
-            # The category label may have OCR'd more cleanly on the OTHER
-            # screenshot — retry against the combined text of both images.
-            combined = f"{out.get('raw_ocr_image1') or ''}\n{out.get('raw_ocr_image2') or ''}"
-            category = classify_star_category(combined)
         if category == "service":
             service_rating = star
         elif category == "product":
@@ -251,7 +248,18 @@ def _periodic_github_sync(stop_event: threading.Event, interval: int = 30):
 #  MAIN
 # =============================================================
 
-def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False):
+def _added_time_key(rec: dict) -> datetime:
+    """Parse the sheet's 'Added Time' (e.g. '03-Jul-2026 23:37:58') for sorting.
+    Unparseable/blank values sort last so they never block chronological rows."""
+    raw = (rec.get("added_time") or "").strip()
+    try:
+        return datetime.strptime(raw, "%d-%b-%Y %H:%M:%S")
+    except ValueError:
+        return datetime.max
+
+
+def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False,
+        retry_failed: bool = False):
     init_db()
 
     if fresh:
@@ -260,22 +268,28 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False):
             c.commit()
         print(f"\n  {YL}Fresh mode: database cleared.{R}")
 
-    all_recs  = scan_folders(limit)
-    done_names= fetch_ok_names()
+    all_recs  = scan_sheet(limit)
+    done_names= fetch_ok_names(retry_failed=retry_failed)
     pending   = [r for r in all_recs if r["file_name"] not in done_names]
+    pending.sort(key=_added_time_key)   # process row-wise: oldest Added Time first
     skipped   = len(all_recs) - len(pending)
+
+    # Refresh sheet-side metadata for already-processed rows too (branch, order id,
+    # etc. can change in the sheet after we OCR'd), then skip them for OCR.
+    for rec in all_recs:
+        if rec["file_name"] in done_names:
+            upsert_record({
+                "file_name":    rec["file_name"],
+                "ticket_id":    rec["ticket_id"],
+                "csv_order_id": rec["csv_order_id"],
+                "added_time":   rec["added_time"],
+                "branch":       rec["branch"],
+            })
 
     if not pending:
         print(f"\n  {GR}All records already processed.{R}")
         print(f"  Database: {DB_PATH}\n")
         return
-
-    # Write PENDING stubs immediately so DB shows all rows from start
-    for rec in pending:
-        upsert_record({"file_name": rec["file_name"],
-                       "image1_path": rec.get("image1_path"),
-                       "image2_path": rec.get("image2_path"),
-                       "flag": "PENDING"})
 
     _header(len(pending), skipped)
 
@@ -301,14 +315,22 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False):
             rec = futs[fut]
             try:
                 res = fut.result()
-                upsert_record(res)
             except Exception as e:
                 logger.error("Error %s: %s", rec["file_name"], e)
                 res = {"file_name": rec["file_name"], "file_order_id": None,
                        "file_star": None, "flag": "ERROR",
                        "remarks_file_order_id": str(e)[:200]}
-                upsert_record(res)
                 err_c[0] += 1
+            # Sheet metadata + persisted verification flags in one write
+            res.update(
+                ticket_id    = rec.get("ticket_id"),
+                csv_order_id = rec.get("csv_order_id"),
+                added_time   = rec.get("added_time"),
+                branch       = rec.get("branch"),
+                sheet_row    = rec.get("sheet_row"),
+            )
+            res.update(compute_flags(res))
+            upsert_record(res)
 
             with lock:
                 sno_c[0] += 1
@@ -340,16 +362,14 @@ if __name__ == "__main__":
     ap.add_argument("--fresh",  action="store_true", help="Clear DB + reprocess all")
     ap.add_argument("--debug",  action="store_true", help="Print raw OCR text per image")
     ap.add_argument("--export", action="store_true", help="Export DB to Excel after run")
+    ap.add_argument("--retry-failed", action="store_true",
+                     help="Also re-attempt rows previously flagged NO_ORDER_ID/NO_STAR")
     a = ap.parse_args()
 
-    run(limit=a.limit, fresh=a.fresh, debug=a.debug)
+    run(limit=a.limit, fresh=a.fresh, debug=a.debug, retry_failed=a.retry_failed)
 
-    # Merge Zoho CSV (Ticket ID + Order ID) into DB so dashboard/export has full fields
-    try:
-        from merge_csv import run as merge_csv_run
-        merge_csv_run()
-    except Exception as e:
-        print(f"  [merge_csv skipped]: {e}")
+    # Sheet fields (Ticket ID / Order ID / Branch / Added Time) are written
+    # inline by scan_sheet(); merge_csv is no longer needed.
 
     if a.export:
         from export import export_to_excel

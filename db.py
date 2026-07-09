@@ -38,6 +38,11 @@ CREATE INDEX IF NOT EXISTS ix_flag  ON zoho_records(flag);
 _NEW_COLUMNS = [
     ("service_rating", "REAL"),
     ("product_rating", "REAL"),
+    ("order_id_match",     "TEXT"),
+    ("service_rating_ge4", "TEXT"),
+    ("product_rating_ge4", "TEXT"),
+    ("verified",           "TEXT"),
+    ("sheet_row",          "INTEGER"),  # original row position in Google Sheet (for sort order)
 ]
 
 
@@ -85,12 +90,23 @@ def upsert_record(rec: dict):
         c.commit()
 
 
-def fetch_ok_names() -> set:
+def fetch_ok_names(retry_failed: bool = False) -> set:
+    """Names of rows that don't need (re)processing on the next run.
+
+    By default, any row that has already been attempted (flag set, not
+    PENDING/ERROR) counts as done — OCR misses (NO_ORDER_ID / NO_STAR) are
+    NOT retried automatically on every -resume. Pass retry_failed=True
+    (pipeline.py --retry-failed) to also re-attempt those rows.
+    """
     with get_conn() as c:
         rows = c.execute(
-            "SELECT file_name FROM zoho_records WHERE flag NOT IN ('PENDING','ERROR')"
-            " AND file_order_id IS NOT NULL"
+            "SELECT file_name, flag FROM zoho_records WHERE flag NOT IN ('PENDING','ERROR')"
         ).fetchall()
+    if retry_failed:
+        return {
+            r["file_name"] for r in rows
+            if "NO_ORDER_ID" not in (r["flag"] or "") and "NO_STAR" not in (r["flag"] or "")
+        }
     return {r["file_name"] for r in rows}
 
 

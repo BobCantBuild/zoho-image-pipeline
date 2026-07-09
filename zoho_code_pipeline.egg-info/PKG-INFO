@@ -9,3 +9,5 @@ Requires-Dist: rapidocr-onnxruntime>=1.3.22
 Requires-Dist: opencv-python-headless>=4.9.0
 Requires-Dist: numpy>=1.26.0
 Requires-Dist: openpyxl>=3.1.2
+Requires-Dist: fastapi>=0.139.0
+Requires-Dist: uvicorn>=0.49.0
