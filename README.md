@@ -5,23 +5,21 @@ End-to-end pipeline to:
 2) Merge Zoho CSV metadata (Added Time, Branch, Ticket ID, Zoho Order ID)
 3) Publish a Streamlit dashboard (local + Streamlit Cloud) that always shows the same data
 
-## Scan any folder for star ratings
-
-Use this when you have a plain folder of screenshots/images and you only want star ratings:
-
-- `python star_scan.py --path "C:\\path\\to\\images" --recursive --out "data\\star_scan.csv"`
-- Optional debug output (mask + overlay PNGs): `python star_scan.py --path "C:\\path\\to\\images" --debug-dir "data\\star_debug"`
-
 ## Repo layout
 
 - `pipeline.py` — scans folders, runs OCR, writes SQLite (`zoho_pipeline.db`)
 - `ocr_engine.py` — RapidOCR + OpenCV extraction logic
 - `image_preprocess.py` — image cleanup helpers for OCR
 - `merge_csv.py` — merges Zoho CSV fields into SQLite (`added_time`, `branch`, `ticket_id`, `csv_order_id`)
+- `bse_api.py` — BSE API client that looks up the Amazon/Flipkart Web Order ID (`web_order_id`)
 - `sync_to_github.py` — exports SQLite → `data/zoho_latest.csv` and pushes to GitHub
 - `dashboard.py` — Streamlit UI (reads SQLite locally, reads CSV on Streamlit Cloud)
 - `streamlit_app.py` — Streamlit Cloud entrypoint (runs `dashboard.py`)
+- `db.py` — SQLite schema + helpers
+- `config.py` — paths and worker settings
+- `ocr_check.py` — manual OCR debugging/inspection script for a single image or folder
 - `data/zoho_latest.csv` — the file Streamlit Cloud reads (auto-updated)
+- `data/images/` — source screenshots (git-ignored: large, contains customer data)
 
 ## 0 → Hero (local)
 

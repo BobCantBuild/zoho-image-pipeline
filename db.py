@@ -43,6 +43,7 @@ _NEW_COLUMNS = [
     ("product_rating_ge4", "TEXT"),
     ("verified",           "TEXT"),
     ("sheet_row",          "INTEGER"),  # original row position in Google Sheet (for sort order)
+    ("web_order_id",       "TEXT"),     # from BSE API (amazon/flipkart order ID)
 ]
 
 

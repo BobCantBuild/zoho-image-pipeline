@@ -15,6 +15,7 @@ data/_debug_three.csv
 data/star_debug*/
 data/_d*.csv
 data/_debug_*.csv
+data/images/
 
 # Legacy / unused files
 CustomerReviewSubmissionFormforSAs_Records_1_1.csv

@@ -18,6 +18,18 @@ from pathlib import Path
 import streamlit as st
 import pandas as pd
 
+try:
+    from bse_api import fetch_web_order_ids_batch
+    _HAS_BSE_API = True
+except ImportError:
+    _HAS_BSE_API = False
+
+def _ensure_web_order_id_col(conn: sqlite3.Connection):
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(zoho_records)").fetchall()}
+    if "web_order_id" not in existing:
+        conn.execute("ALTER TABLE zoho_records ADD COLUMN web_order_id TEXT")
+        conn.commit()
+
 st.set_page_config(
     page_title="Customer Review Analysis",
     page_icon="📦",
@@ -457,9 +469,11 @@ def load_data(db_mtime: float, csv_mtime: float) -> tuple:
     if Path(DB_PATH).exists():
         try:
             conn = sqlite3.connect(DB_PATH)
+            _ensure_web_order_id_col(conn)
             df = pd.read_sql_query("""
                 SELECT sno, added_time, branch, ticket_id,
                        csv_order_id AS Zoho_order_ID,
+                       web_order_id,
                        file_order_id,
                        COALESCE(service_rating, NULL) AS service_rating,
                        COALESCE(product_rating, NULL) AS product_rating,
@@ -491,7 +505,7 @@ def load_data(db_mtime: float, csv_mtime: float) -> tuple:
     if CSV_PATH.exists():
         df = pd.read_csv(CSV_PATH, encoding="utf-8-sig", dtype=str)
         # Ensure new columns exist even in older CSV snapshots
-        for _col in ("service_rating", "product_rating"):
+        for _col in ("service_rating", "product_rating", "web_order_id"):
             if _col not in df.columns:
                 df[_col] = None
         pf = df.get("pipeline_flag", pd.Series(dtype=str))
@@ -525,6 +539,48 @@ def _file_mtime(p: Path) -> float:
 _db_mtime  = _file_mtime(DB_PATH)
 _csv_mtime = _file_mtime(CSV_PATH)
 df, source_label, stats = load_data(db_mtime=_db_mtime, csv_mtime=_csv_mtime)
+
+# ── Background fetch of missing Web Order IDs from BSE API ───
+import threading as _th
+
+def _bg_fetch_web_order_ids(dataframe: pd.DataFrame):
+    """Fetch missing web_order_ids and write them to DB. Runs in background."""
+    try:
+        missing = dataframe[
+            dataframe["ticket_id"].notna()
+            & (dataframe["ticket_id"].astype(str).str.strip() != "")
+            & (dataframe["web_order_id"].isna() | (dataframe["web_order_id"].astype(str).str.strip().isin(["", "None", "nan"])))
+        ]
+        if missing.empty:
+            return
+        tids = missing["ticket_id"].astype(str).str.strip().tolist()
+        api_results = fetch_web_order_ids_batch(tids)
+        updates = [(woid, tid) for tid, woid in api_results.items() if woid]
+        if updates:
+            import sqlite3 as _sql
+            uc = _sql.connect(str(DB_PATH), timeout=30)
+            uc.executemany("UPDATE zoho_records SET web_order_id=? WHERE ticket_id=?", updates)
+            uc.commit()
+            uc.close()
+    except Exception:
+        pass
+
+if (
+    _HAS_BSE_API
+    and not df.empty
+    and "web_order_id" in df.columns
+    and Path(DB_PATH).exists()
+    and not st.session_state.get("_woid_fetch_started", False)
+):
+    _has_missing = (
+        df["ticket_id"].notna()
+        & (df["ticket_id"].astype(str).str.strip() != "")
+        & (df["web_order_id"].isna() | (df["web_order_id"].astype(str).str.strip().isin(["", "None", "nan"])))
+    ).any()
+    if _has_missing:
+        st.session_state["_woid_fetch_started"] = True
+        _t = _th.Thread(target=_bg_fetch_web_order_ids, args=(df.copy(),), daemon=True)
+        _t.start()
 
 total   = max(stats.get("total",   1), 1)
 pending = stats.get("pending", 0)
@@ -794,9 +850,10 @@ if "date_of_posting" in filt.columns:
 if search:
     s = search.lower()
     filt = filt[
-        filt["file_name"].fillna("").str.lower().str.contains(s)     |
-        filt["file_order_id"].fillna("").str.lower().str.contains(s) |
-        filt["Zoho_order_ID"].fillna("").str.lower().str.contains(s) |
+        filt["file_name"].fillna("").str.lower().str.contains(s)      |
+        filt["file_order_id"].fillna("").str.lower().str.contains(s)  |
+        filt["Zoho_order_ID"].fillna("").str.lower().str.contains(s)  |
+        filt["web_order_id"].fillna("").str.lower().str.contains(s)   |
         filt["ticket_id"].fillna("").str.lower().str.contains(s)
     ]
 
@@ -806,12 +863,12 @@ st.session_state["_total_pages"] = total_pages   # used by _next_page callback
 
 # ── Fill export button now that filt is ready ─────────────────
 exp_cols = ["sno","date_of_posting_str","branch","ticket_id","Zoho_order_ID",
-            "file_order_id","Order_ID_Flag",
+            "web_order_id","file_order_id","Order_ID_Flag",
             "service_rating","product_rating","file_star",
             "service_rating_flag","product_rating_flag","file_name","Flag"]
 exp_df = filt[[c for c in exp_cols if c in filt.columns]].copy()
 exp_df.columns = ["#","Date of Posting","Branch","Ticket ID","Zoho Order ID",
-                  "File Order ID","Order ID Match",
+                  "Web Order ID","File Order ID","Order ID Match",
                   "Service Rating","Product Rating","Star Rating",
                   "SERVICE RATING >=4","PRODUCT RATING >=4","File Name","Verified"][: len(exp_df.columns)]
 with export_slot:
@@ -851,6 +908,7 @@ for i, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
       <td class="mono">{safe(row.get('branch',''))}</td>
       <td class="mono">{safe(row.get('ticket_id',''))}</td>
       <td class="mono">{safe(row.get('Zoho_order_ID',''))}</td>
+      <td class="mono">{safe(row.get('web_order_id',''))}</td>
       <td class="mono">{diff_oid_html(row.get('Zoho_order_ID',''), row.get('file_order_id',''))}</td>
       {_pend_cell if _pending else flag_cell(row['Order_ID_Flag'])}
       <td class="ctr">{safe('') if _pending else star_html(row.get('service_rating',''))}</td>
@@ -872,6 +930,7 @@ st.markdown(f"""
       <th>Branch</th>
       <th>Ticket ID</th>
       <th>Zoho Order ID</th>
+      <th>Web Order ID</th>
       <th>File Order ID</th>
       <th style="text-align:center">Order ID Match</th>
       <th style="text-align:center">Service Rating</th>

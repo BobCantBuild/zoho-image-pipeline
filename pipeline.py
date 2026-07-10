@@ -22,6 +22,7 @@ from db       import init_db, upsert_record, fetch_ok_names, get_stats
 from ocr_engine import extract_order_id, extract_star_rating, get_raw_ocr, classify_star_category
 from sheet_source import fetch_rows, ensure_row_images
 from flags import compute_flags
+from bse_api import fetch_web_order_id
 
 # ── Logging → file only; terminal output via print() ──────────
 logging.basicConfig(
@@ -276,15 +277,48 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False,
 
     # Refresh sheet-side metadata for already-processed rows too (branch, order id,
     # etc. can change in the sheet after we OCR'd), then skip them for OCR.
+    # Fetch web_order_ids for already-done rows that are still missing one
+    _done_need_woid = []
+    with sqlite3.connect(DB_PATH) as _c:
+        for rec in all_recs:
+            if rec["file_name"] in done_names:
+                tid = str(rec.get("ticket_id", "")).strip()
+                if tid:
+                    row = _c.execute(
+                        "SELECT web_order_id FROM zoho_records WHERE file_name=?",
+                        (rec["file_name"],)
+                    ).fetchone()
+                    if row and not (row[0] and str(row[0]).strip()):
+                        _done_need_woid.append(rec)
+
+    _done_woid_futs = {}
+    if _done_need_woid:
+        print(f"  {CY}Fetching Web Order IDs for {len(_done_need_woid)} existing rows…{R}")
+        _done_woid_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="bse-done")
+        for rec in _done_need_woid:
+            tid = str(rec["ticket_id"]).strip()
+            if tid not in _done_woid_futs:
+                _done_woid_futs[tid] = _done_woid_pool.submit(fetch_web_order_id, tid)
+
     for rec in all_recs:
         if rec["file_name"] in done_names:
-            upsert_record({
+            tid = str(rec.get("ticket_id", "")).strip()
+            woid = None
+            if tid and tid in _done_woid_futs:
+                try:
+                    woid = _done_woid_futs[tid].result(timeout=30)
+                except Exception:
+                    pass
+            update = {
                 "file_name":    rec["file_name"],
                 "ticket_id":    rec["ticket_id"],
                 "csv_order_id": rec["csv_order_id"],
                 "added_time":   rec["added_time"],
                 "branch":       rec["branch"],
-            })
+            }
+            if woid:
+                update["web_order_id"] = woid
+            upsert_record(update)
 
     if not pending:
         print(f"\n  {GR}All records already processed.{R}")
@@ -308,6 +342,14 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False,
     t0    = time.time()
     lock  = threading.Lock()
 
+    # Pre-submit BSE API lookups for all pending tickets in parallel
+    _woid_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bse-api")
+    _woid_futs = {}
+    for r in pending:
+        tid = r.get("ticket_id")
+        if tid and str(tid).strip():
+            _woid_futs[str(tid).strip()] = _woid_pool.submit(fetch_web_order_id, str(tid).strip())
+
     with ThreadPoolExecutor(max_workers=OCR_WORKERS) as pool:
         futs = {pool.submit(process_record, r, debug): r for r in pending}
 
@@ -322,12 +364,20 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False,
                        "remarks_file_order_id": str(e)[:200]}
                 err_c[0] += 1
             # Sheet metadata + persisted verification flags in one write
+            tid = str(rec.get("ticket_id", "")).strip()
+            web_oid = None
+            if tid and tid in _woid_futs:
+                try:
+                    web_oid = _woid_futs[tid].result(timeout=30)
+                except Exception:
+                    pass
             res.update(
                 ticket_id    = rec.get("ticket_id"),
                 csv_order_id = rec.get("csv_order_id"),
                 added_time   = rec.get("added_time"),
                 branch       = rec.get("branch"),
                 sheet_row    = rec.get("sheet_row"),
+                web_order_id = web_oid,
             )
             res.update(compute_flags(res))
             upsert_record(res)
@@ -343,6 +393,8 @@ def run(limit: Optional[int] = None, fresh: bool = False, debug: bool = False,
                      res.get("file_star"),
                      res.get("flag","?"))
                 _progress(sno, len(pending), rate, eta, err_c[0])
+
+    _woid_pool.shutdown(wait=False)
 
     # ── Stop background sync; do one final sync ──────────────────
     _stop_sync.set()
