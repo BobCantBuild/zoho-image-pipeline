@@ -19,9 +19,6 @@ data/images/
 
 # Legacy / unused files
 CustomerReviewSubmissionFormforSAs_Records_1_1.csv
-star_scan.py
-star_detection.py
-star_eval.py
 api.py
 docs/capture.py
 docs/capture_table.py
