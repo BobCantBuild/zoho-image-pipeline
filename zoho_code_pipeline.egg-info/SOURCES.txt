@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-tests/test_star_detection.py
-zoho_code_pipeline.egg-info/PKG-INFO
-zoho_code_pipeline.egg-info/SOURCES.txt
-zoho_code_pipeline.egg-info/dependency_links.txt
-zoho_code_pipeline.egg-info/entry_points.txt
-zoho_code_pipeline.egg-info/requires.txt
-zoho_code_pipeline.egg-info/top_level.txt

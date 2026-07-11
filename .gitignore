@@ -26,3 +26,16 @@ api.py
 docs/capture.py
 docs/capture_table.py
 docs/crop.py
+
+# Sensitive / large data files
+Data-Training.xlsx
+star_eval_errors.csv
+star_eval_results.csv
+EVAL_REPORT.md
+VALIDATION_SUMMARY.txt
+
+# Build artifacts
+*.egg-info/
+
+# Local Claude config
+.claude/settings.local.json
